@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp Broadcast</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%2325D366'/%3E%3Cpath d='M9 23l1.2-4A7 7 0 1 1 13 21.8z' fill='none' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div>
+      <h1>WhatsApp Broadcast</h1>
+      <p class="muted">Personalized messages from your own number, one at a time, at a human pace.</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="wa-badge" class="badge badge-gray">Not connected</span>
+    <span id="daily-badge" class="badge badge-gray" title="Messages sent today, all campaigns together">Today: 0 / 150</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- 1. Connection -->
+  <section class="card" id="card-connect">
+    <div class="card-head">
+      <h2><span class="step">1</span>Link your WhatsApp number</h2>
+      <div class="actions">
+        <button id="btn-connect" class="btn btn-primary">Connect</button>
+        <button id="btn-disconnect" class="btn" hidden>Disconnect</button>
+        <button id="btn-logout" class="btn btn-danger-outline" hidden title="Remove this computer from your phone's linked devices and delete the saved session">Unlink</button>
+      </div>
+    </div>
+    <div class="connect-body">
+      <div id="wa-status-text" class="status-text">Click <b>Connect</b>, then scan the QR code with the phone that holds the number you want to send from.</div>
+      <div id="qr-box" class="qr-box" hidden>
+        <img id="qr-img" alt="QR code to link WhatsApp" width="260" height="260">
+        <ol class="qr-steps">
+          <li>Open <b>WhatsApp</b> on your phone</li>
+          <li>Tap <b>⋮ Menu</b> (Android) or <b>Settings</b> (iPhone)</li>
+          <li>Tap <b>Linked devices</b> → <b>Link a device</b></li>
+          <li>Point the phone at this code</li>
+        </ol>
+      </div>
+      <div id="wa-info" class="wa-info" hidden></div>
+    </div>
+  </section>
+
+  <!-- 2. Contacts -->
+  <section class="card" id="card-contacts">
+    <div class="card-head">
+      <h2><span class="step">2</span>Contacts</h2>
+      <div class="actions">
+        <a class="btn btn-ghost" href="/api/sample.csv" download="contacts-sample.csv">Sample file</a>
+      </div>
+    </div>
+    <div class="contacts-input">
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="file-input" accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsm,.ods">
+        <div class="dz-icon" aria-hidden="true">⬆</div>
+        <div><b>Drop a CSV or Excel file here</b> or click to choose one</div>
+        <div class="muted small">Columns like <i>Prénom / Nom / Téléphone</i> or <i>First name / Last name / Phone</i> are detected automatically. Extra columns become placeholders.</div>
+      </label>
+      <div class="or">or</div>
+      <div class="paste-box">
+        <textarea id="paste-input" rows="6" placeholder="Paste rows here, one contact per line, e.g.&#10;Jean;Dupont;70 123 456&#10;Marie;Curie;+961 71 234 567"></textarea>
+        <button id="btn-parse-text" class="btn">Use pasted rows</button>
+      </div>
+    </div>
+    <div class="row gap wrap">
+      <label class="field">
+        <span>Default country for numbers without a country code</span>
+        <select id="default-country">
+          <option value="LB">Lebanon (+961)</option>
+          <option value="FR">France (+33)</option>
+          <option value="AE">United Arab Emirates (+971)</option>
+          <option value="SA">Saudi Arabia (+966)</option>
+          <option value="QA">Qatar (+974)</option>
+          <option value="KW">Kuwait (+965)</option>
+          <option value="JO">Jordan (+962)</option>
+          <option value="EG">Egypt (+20)</option>
+          <option value="CA">Canada (+1)</option>
+          <option value="US">United States (+1)</option>
+          <option value="GB">United Kingdom (+44)</option>
+          <option value="BE">Belgium (+32)</option>
+          <option value="CH">Switzerland (+41)</option>
+          <option value="DE">Germany (+49)</option>
+          <option value="ES">Spain (+34)</option>
+          <option value="IT">Italy (+39)</option>
+          <option value="CY">Cyprus (+357)</option>
+          <option value="TR">Turkey (+90)</option>
+          <option value="AU">Australia (+61)</option>
+          <option value="BR">Brazil (+55)</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="mapping-box" class="mapping" hidden>
+      <div class="mapping-title">Detected columns <span class="muted small">(change if something looks wrong, then click Apply)</span></div>
+      <div class="mapping-grid">
+        <label>First name <select id="map-firstName"></select></label>
+        <label>Last name <select id="map-lastName"></select></label>
+        <label>Full name <select id="map-fullName"></select></label>
+        <label>Phone <select id="map-phone"></select></label>
+        <label class="check"><input type="checkbox" id="map-hasHeader"> First row is a header</label>
+        <button id="btn-apply-mapping" class="btn">Apply</button>
+      </div>
+    </div>
+
+    <div id="contacts-summary" class="summary" hidden></div>
+    <div id="contacts-table-wrap" class="table-wrap" hidden>
+      <table class="table" id="contacts-table">
+        <thead><tr><th>#</th><th>First name</th><th>Last name</th><th>Phone</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="contacts-more" class="muted small"></div>
+    </div>
+  </section>
+
+  <!-- 3. Message -->
+  <section class="card" id="card-message">
+    <div class="card-head">
+      <h2><span class="step">3</span>Message</h2>
+      <div class="actions">
+        <button id="btn-test" class="btn" title="Sends the message, filled in for the selected contact, to your own number">Send a test to myself</button>
+      </div>
+    </div>
+    <div class="chips" id="placeholder-chips"></div>
+    <textarea id="template" rows="7" placeholder="Bonjour {{firstName}},&#10;&#10;..."></textarea>
+    <div class="row between wrap">
+      <div class="muted small"><span id="template-length">0</span> characters. Use <code>{{firstName}}</code>, <code>{{lastName}}</code>, <code>{{fullName}}</code> or any column name. <code>{{firstName|there}}</code> gives a fallback.</div>
+    </div>
+    <div class="preview">
+      <div class="preview-head">
+        <span>Preview for</span>
+        <select id="preview-contact"></select>
+      </div>
+      <pre id="preview-text" class="preview-text muted">Your message will appear here.</pre>
+      <div id="preview-warn" class="warn small" hidden></div>
+    </div>
+  </section>
+
+  <!-- 4. Send -->
+  <section class="card" id="card-send">
+    <div class="card-head">
+      <h2><span class="step">4</span>Send</h2>
+      <div class="actions" id="campaign-actions">
+        <button id="btn-start" class="btn btn-primary">Start sending</button>
+        <button id="btn-pause" class="btn" hidden>Pause</button>
+        <button id="btn-resume" class="btn btn-primary" hidden>Resume</button>
+        <button id="btn-stop" class="btn btn-danger-outline" hidden>Stop</button>
+        <button id="btn-retry" class="btn" hidden>Retry failed</button>
+        <a id="btn-export" class="btn" href="/api/campaign/export.csv" download hidden>Export results</a>
+        <button id="btn-discard" class="btn btn-ghost" hidden>New campaign</button>
+      </div>
+    </div>
+
+    <details class="settings" id="settings-details" open>
+      <summary>Pacing &amp; safety settings</summary>
+      <div class="settings-grid">
+        <label class="field"><span>Min delay between messages (s)</span><input type="number" id="s-minDelaySec" min="3" max="3600"></label>
+        <label class="field"><span>Max delay between messages (s)</span><input type="number" id="s-maxDelaySec" min="3" max="7200"></label>
+        <label class="field"><span>Messages per batch</span><input type="number" id="s-batchSize" min="1" max="1000"></label>
+        <label class="field"><span>Pause between batches (min)</span><input type="number" id="s-batchPauseMin" min="0" max="1440" step="0.5"></label>
+        <label class="field"><span>Daily limit (all campaigns)</span><input type="number" id="s-dailyLimit" min="1" max="5000"></label>
+        <label class="field"><span>Retries per failed message</span><input type="number" id="s-maxRetries" min="0" max="5"></label>
+        <label class="check"><input type="checkbox" id="s-checkRegistered"> Skip numbers that are not on WhatsApp</label>
+        <label class="check"><input type="checkbox" id="s-simulateTyping"> Show "typing…" before each message</label>
+        <label class="check"><input type="checkbox" id="s-quietHoursEnabled"> Do not send between
+          <input type="time" id="s-quietStart"> and <input type="time" id="s-quietEnd"></label>
+      </div>
+      <div id="settings-warn" class="warn small" hidden></div>
+      <div class="safety-tips">
+        <b>Staying safe.</b> WhatsApp bans numbers that behave like bots: many messages in a short time, identical text, messages to people who never saved your number, and recipients tapping <i>Report</i> or <i>Block</i>. Keep the random delay, keep batches small, stay well under 200 messages a day on a personal number (far less on a brand-new one), write a message people expect from you, and let them reply or opt out. Prefer sending to people who already have your number saved. Unofficial automation is against WhatsApp's terms; for large volumes use the official WhatsApp Business Platform.
+      </div>
+    </details>
+
+    <div id="estimate" class="estimate muted"></div>
+
+    <div id="campaign-box" hidden>
+      <div class="campaign-head">
+        <div>
+          <span id="campaign-state" class="badge badge-gray">idle</span>
+          <span id="campaign-name" class="muted"></span>
+        </div>
+        <div id="campaign-wait" class="wait"></div>
+      </div>
+      <div id="campaign-reason" class="warn" hidden></div>
+      <div class="progress"><div id="progress-bar" class="progress-bar" style="width:0%"></div></div>
+      <div class="counts" id="campaign-counts"></div>
+      <div class="results-filter">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="pending">Pending</button>
+        <button class="chip" data-filter="sent">Sent</button>
+        <button class="chip" data-filter="failed">Failed</button>
+        <button class="chip" data-filter="not_on_whatsapp">Not on WhatsApp</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="results-table">
+          <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Status</th><th>Details</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="results-more" class="muted small"></div>
+      </div>
+    </div>
+
+    <details class="log-details">
+      <summary>Activity log</summary>
+      <div id="log" class="log"></div>
+    </details>
+  </section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
