@@ -8,7 +8,7 @@ test('CSV with English headers and comma delimiter', () => {
   const text = 'First name,Last name,WhatsApp\nJean,Dupont,+961 70 123 456\nMarie,Curie,03 123 456\n';
   const r = parseContacts({ text }, { defaultCountry: 'LB' });
   assert.equal(r.hasHeader, true);
-  assert.deepEqual(r.mapping, { phone: 'WhatsApp', firstName: 'First name', lastName: 'Last name', fullName: null, phoneFallbacks: [] });
+  assert.deepEqual(r.mapping, { phone: 'WhatsApp', phonePrefix: null, firstName: 'First name', lastName: 'Last name', fullName: null, phoneFallbacks: [] });
   assert.equal(r.contacts.length, 2);
   assert.equal(r.contacts[0].firstName, 'Jean');
   assert.equal(r.contacts[0].lastName, 'Dupont');
@@ -166,6 +166,40 @@ test('Excel date cells are rendered as dd/mm/yyyy', () => {
   const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', cellDates: true });
   const r = parseContacts({ buffer, filename: 'liste.xlsx' }, { defaultCountry: 'LB' });
   assert.equal(r.contacts[0].extra['Date de naissance'], '14/05/2010');
+  assert.equal(r.contacts[0].phone, '96170123456');
+});
+
+test('teachers layout: Name, Whatsapp, Prefix (country code), Last Name, School', () => {
+  const text = 'Name,Whatsapp,Prefix,Last Name,School\nRita,70 123 456,961,Khoury,Lycée A\nPierre,6 12 34 56 78,+33,Martin,Lycée B\nSami,0096171234567,961,Haddad,Lycée A\nNour,96176123456,961,Saad,Lycée C\n';
+  const r = parseContacts({ text }, { defaultCountry: 'LB' });
+  assert.equal(r.mapping.firstName, 'Name');
+  assert.equal(r.mapping.lastName, 'Last Name');
+  assert.equal(r.mapping.phone, 'Whatsapp');
+  assert.equal(r.mapping.phonePrefix, 'Prefix');
+  assert.deepEqual(r.extraHeaders, ['School']);
+  assert.deepEqual(r.contacts.map(c => c.status), ['ok', 'ok', 'ok', 'ok']);
+  assert.equal(r.contacts[0].phone, '96170123456');
+  assert.equal(r.contacts[1].phone, '33612345678', 'prefix +33 applied to a French local number');
+  assert.equal(r.contacts[2].phone, '96171234567', 'number already international: prefix ignored');
+  assert.equal(r.contacts[3].phone, '96176123456', 'number with country code but no plus: still correct');
+  assert.equal(r.contacts[0].firstName, 'Rita');
+  assert.equal(r.contacts[0].lastName, 'Khoury');
+  assert.equal(r.contacts[0].extra.School, 'Lycée A');
+});
+
+test('a "Prefix" column holding titles stays an ordinary placeholder column', () => {
+  const text = 'Name,Whatsapp,Prefix,Last Name,School\nRita,70 123 456,Mrs,Khoury,Lycée A\nPierre,+33 6 12 34 56 78,Mr,Martin,Lycée B\n';
+  const r = parseContacts({ text }, { defaultCountry: 'LB' });
+  assert.equal(r.mapping.phonePrefix, null);
+  assert.deepEqual(r.extraHeaders, ['Prefix', 'School']);
+  assert.equal(r.contacts[0].extra.Prefix, 'Mrs');
+  assert.equal(r.contacts[0].phone, '96170123456');
+  assert.equal(r.contacts[1].phone, '33612345678');
+});
+
+test('truncated "Whatsap" header is still recognised as the phone column', () => {
+  const r = parseContacts({ text: 'Name,Whatsap,Last Name\nRita,70123456,Khoury\n' }, { defaultCountry: 'LB' });
+  assert.equal(r.mapping.phone, 'Whatsap');
   assert.equal(r.contacts[0].phone, '96170123456');
 });
 

@@ -354,6 +354,7 @@ app.get('/api/campaign/export.csv', wrap((req, res) => {
 }));
 
 app.get('/api/sample.csv', (req, res) => res.sendFile(path.join(__dirname, 'samples', 'contacts-sample.csv')));
+app.use('/samples', express.static(path.join(__dirname, 'samples')));
 
 // Express 5 error handler (multer errors, bad JSON, ...)
 // eslint-disable-next-line no-unused-vars

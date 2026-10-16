@@ -41,7 +41,7 @@ Then open <http://127.0.0.1:3210> if it does not open by itself.
 3. **Message.** Type your text. Click a placeholder chip to insert it. The preview shows the message for a real contact. *Send a test to myself* delivers it to your own number so you can see it on your phone.
 4. **Send.** Review the pacing settings, click *Start sending*, and keep the window open. You can pause or stop at any time; the progress table shows what happened to each contact. *Retry failed* puts failed contacts back in the queue (and, if you choose, the ones reported as not on WhatsApp); press *Resume* to send them.
 
-A sample file is in `samples/contacts-sample.csv` (also downloadable from the app).
+Sample files are in `samples/` (also downloadable from the app): `teachers-sample.csv` (Name, Whatsapp, Prefix, Last Name, School) and `contacts-sample.csv` (Prénom, Nom, Téléphone, Classe).
 
 ### Contact file format
 
@@ -62,7 +62,13 @@ Jean;Dupont;0096170123456
 Jean	Dupont	70 123 456        (pasted from Excel, no header row)
 ```
 
-Numbers may be written with spaces, dashes, dots, parentheses, `+` or `00`, with Arabic digits, or two numbers in one cell (the first valid one is used). Numbers without a country code use the default country selected in the app. Numbers with a different country code (`+33 6…`) are kept as they are. A single "Nom" or "Nom et Prénom" column containing `DUPONT Jean` is split into first and last name. Title rows above the real header are skipped. When a file has several phone columns (for example *Mobile Père* and *Mobile Mère*), the first one is used and the others fill in when it is empty; the contacts table says which column a number came from. Row numbers in the table refer to the rows of your file.
+```csv
+Name,Whatsapp,Prefix,Last Name,School
+Rita,70 123 456,961,Khoury,Lycée A
+Pierre,6 12 34 56 78,+33,Martin,Lycée B
+```
+
+Numbers may be written with spaces, dashes, dots, parentheses, `+` or `00`, with Arabic digits, or two numbers in one cell (the first valid one is used). A separate country-code column (`Prefix`, `Indicatif`, `Country code`) is applied to numbers written without one; a "Prefix" column that holds titles (Mr, Mrs) is left alone and becomes a placeholder. Numbers without a country code use the default country selected in the app. Numbers with a different country code (`+33 6…`) are kept as they are. A single "Nom" or "Nom et Prénom" column containing `DUPONT Jean` is split into first and last name. Title rows above the real header are skipped. When a file has several phone columns (for example *Mobile Père* and *Mobile Mère*), the first one is used and the others fill in when it is empty; the contacts table says which column a number came from. Row numbers in the table refer to the rows of your file.
 
 ### Placeholders
 

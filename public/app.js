@@ -20,6 +20,8 @@
     settingsTimer: null,
   };
 
+  const MAP_ROLES = ['firstName', 'lastName', 'fullName', 'phone', 'phonePrefix'];
+
   const STATUS_LABEL = {
     ok: 'Ready', invalid: 'Invalid', duplicate: 'Duplicate',
     pending: 'Pending', sending: 'Sending…', sent: 'Sent', failed: 'Failed', not_on_whatsapp: 'Not on WhatsApp',
@@ -187,7 +189,7 @@
     if (!S.parse || !S.parse.headers.length) { box.hidden = true; return; }
     box.hidden = false;
     const headers = S.parse.headers;
-    for (const role of ['firstName', 'lastName', 'fullName', 'phone']) {
+    for (const role of MAP_ROLES) {
       const sel = $(`map-${role}`);
       sel.innerHTML = `<option value="">(none)</option>` + headers.map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join('');
       sel.value = S.parse.mapping[role] || '';
@@ -201,7 +203,7 @@
     const override = { hasHeader };
     if (!headerChanged) {
       override.mapping = {};
-      for (const role of ['firstName', 'lastName', 'fullName', 'phone']) override.mapping[role] = $(`map-${role}`).value || null;
+      for (const role of MAP_ROLES) override.mapping[role] = $(`map-${role}`).value || null;
     }
     S.mappingTouched = !headerChanged;
     parseSource(override);
@@ -217,7 +219,7 @@
       `<span class="badge badge-green">${stats.ok} ready</span>`,
       stats.invalid ? `<span class="badge badge-red">${stats.invalid} invalid</span>` : '',
       stats.duplicate ? `<span class="badge badge-amber">${stats.duplicate} duplicate</span>` : '',
-      `<span class="muted small">${stats.total} row(s) read${S.source && S.source.file ? ` from ${esc(S.source.file.name)}` : ''}${S.parse.headerRow > 1 ? ` · header found on row ${S.parse.headerRow}` : ''}${S.parse.extraHeaders && S.parse.extraHeaders.length ? ` · extra columns: ${S.parse.extraHeaders.map(esc).join(', ')}` : ''}${S.parse.mapping && S.parse.mapping.phoneFallbacks && S.parse.mapping.phoneFallbacks.length ? ` · also using numbers from: ${S.parse.mapping.phoneFallbacks.map(esc).join(', ')}` : ''}</span>`,
+      `<span class="muted small">${stats.total} row(s) read${S.source && S.source.file ? ` from ${esc(S.source.file.name)}` : ''}${S.parse.headerRow > 1 ? ` · header found on row ${S.parse.headerRow}` : ''}${S.parse.extraHeaders && S.parse.extraHeaders.length ? ` · extra columns: ${S.parse.extraHeaders.map(esc).join(', ')}` : ''}${S.parse.mapping && S.parse.mapping.phonePrefix ? ` · country code from: ${esc(S.parse.mapping.phonePrefix)}` : ''}${S.parse.mapping && S.parse.mapping.phoneFallbacks && S.parse.mapping.phoneFallbacks.length ? ` · also using numbers from: ${S.parse.mapping.phoneFallbacks.map(esc).join(', ')}` : ''}</span>`,
     ].join(' ');
     wrap.hidden = false;
     const MAX = 400;

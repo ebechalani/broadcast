@@ -55,7 +55,8 @@
     <div class="card-head">
       <h2><span class="step">2</span>Contacts</h2>
       <div class="actions">
-        <a class="btn btn-ghost" href="/api/sample.csv" download="contacts-sample.csv">Sample file</a>
+        <a class="btn btn-ghost" href="/samples/teachers-sample.csv" download="teachers-sample.csv" title="Name, Whatsapp, Prefix, Last Name, School">Sample (teachers)</a>
+        <a class="btn btn-ghost" href="/samples/contacts-sample.csv" download="contacts-sample.csv" title="Prénom, Nom, Téléphone, Classe">Sample (parents)</a>
       </div>
     </div>
     <div class="contacts-input">
@@ -106,6 +107,7 @@
         <label>Last name <select id="map-lastName"></select></label>
         <label>Full name <select id="map-fullName"></select></label>
         <label>Phone <select id="map-phone"></select></label>
+        <label>Country prefix (optional) <select id="map-phonePrefix"></select></label>
         <label class="check"><input type="checkbox" id="map-hasHeader"> First row is a header</label>
         <button id="btn-apply-mapping" class="btn">Apply</button>
       </div>

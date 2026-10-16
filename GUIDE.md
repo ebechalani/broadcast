@@ -63,19 +63,29 @@ The app reads an Excel file (`.xlsx`) or a CSV file, or rows pasted straight fro
 
 ### How the file should look
 
-One line per person, with a header row on top. Example:
+One line per person, with a header row on top. This is the teachers list layout, which works as is:
 
-| Prénom | Nom | Téléphone | Classe |
-| --- | --- | --- | --- |
-| Jean | Dupont | 70 123 456 | 6ème B |
-| Marie | Curie | +961 71 234 567 | 5ème A |
+| Name | Whatsapp | Prefix | Last Name | School |
+| --- | --- | --- | --- | --- |
+| Rita | 70 123 456 | 961 | Khoury | Lycée A |
+| Pierre | 6 12 34 56 78 | +33 | Martin | Lycée B |
 
-Rules:
+How each column is used:
 
-- Column names can be in French or English: `Prénom / Nom / Téléphone`, `First name / Last name / Phone`, `Mobile`, `WhatsApp`, `Nom et Prénom`, `Mobile Père / Mobile Mère`… The app recognises them. If it guesses wrong you can correct it on the page.
-- Phone numbers can be written any way: `70 123 456`, `03-123-456`, `+961 70 123 456`, `0096170123456`. Numbers **without** a country code use the default country chosen on the page (Lebanon by default). Foreign numbers must have their country code (`+33 6…`).
-- Any extra column (Classe, Montant, Date…) can be used in the message as a placeholder.
-- A title line above the header (like "Liste des parents") is fine, the app skips it.
+- **Name** → first name (`{{firstName}}` or `{{Name}}` in the message).
+- **Last Name** → last name (`{{lastName}}`).
+- **Whatsapp** → the number to send to.
+- **Prefix** → the country code of that number (`961`, `+961` or `00961` all work). It is put in front of numbers that do not already start with `+` or `00`. If the Prefix column contains titles instead (Mr, Mrs, Dr), the app notices and simply offers it as the `{{Prefix}}` placeholder.
+- **School** → available as `{{School}}` in the message.
+
+A parents list such as `Prénom / Nom / Téléphone / Classe` works the same way. Rules:
+
+- Column names can be in French or English: `Prénom / Nom / Téléphone`, `First name / Last name / Phone`, `Name / Last Name`, `Mobile`, `WhatsApp`, `Nom et Prénom`, `Mobile Père / Mobile Mère`… The app recognises them. If it guesses wrong you can correct it on the page (including which column holds the country prefix).
+- Phone numbers can be written any way: `70 123 456`, `03-123-456`, `+961 70 123 456`, `0096170123456`. Numbers **without** a country code use the Prefix column when there is one, otherwise the default country chosen on the page (Lebanon by default). Foreign numbers need their country code, in the number itself (`+33 6…`) or in the Prefix column.
+- Any extra column (School, Classe, Montant, Date…) can be used in the message as a placeholder.
+- A title line above the header (like "Liste des enseignants") is fine, the app skips it.
+
+Two sample files are in the `samples` folder and behind the **Sample** buttons on the page: `teachers-sample.csv` (Name, Whatsapp, Prefix, Last Name, School) and `contacts-sample.csv` (Prénom, Nom, Téléphone, Classe).
 
 ### Loading it
 
@@ -90,11 +100,22 @@ Rules:
 
 1. In box **3 – Message**, type your text. Press Enter for new lines, exactly as you want it to appear in WhatsApp.
 2. To insert the person's name, click a blue chip such as **{{firstName}}** or type it yourself. Available placeholders:
-   - `{{firstName}}` – first name
+   - `{{firstName}}` – first name (the *Name* column)
    - `{{lastName}}` – last name
    - `{{fullName}}` – both
-   - `{{Classe}}` – or any other column of your file, written like the column title
+   - `{{School}}`, `{{Classe}}` – or any other column of your file, written like the column title
    - `{{firstName|Madame, Monsieur}}` – a fallback text used when the value is empty
+
+   Example for the teachers list:
+
+   ```text
+   Dear {{firstName}} {{lastName}},
+
+   This is a reminder that the teachers' meeting for {{School}} takes place on Thursday at 5 pm in the main hall. Please confirm your presence by replying to this message.
+
+   Thank you,
+   The administration
+   ```
 3. The **Preview** box shows the message as the first contact will receive it. Change the person in the drop-down to check others.
 4. Click **Send a test to myself**. The message arrives in your own WhatsApp (in the chat with yourself) so you can see the final result on a phone. Fix and test again until it is right.
 
