@@ -1,0 +1,206 @@
+# WhatsApp Broadcast – Step-by-step guide
+
+This guide takes you from an empty PC to a sent campaign. Follow it in order the first time; afterwards you only need Part 4 onwards.
+
+---
+
+## Part 1 – What you need (5 minutes)
+
+- A Windows PC that stays on while messages are sent (laptop plugged in is fine).
+- The phone that holds the WhatsApp number you will send from. It must stay switched on and connected to the internet during sending.
+- An internet connection on the PC.
+- Your contact list in Excel, or as a CSV file, with at least a name and a phone number per line.
+
+---
+
+## Part 2 – Install (once per PC, about 10 minutes)
+
+### Step 1 – Install Node.js
+
+1. Open <https://nodejs.org> in your browser.
+2. Click the big green **LTS** download button.
+3. Run the downloaded installer. Click **Next** on every screen, keep all defaults, click **Install**, then **Finish**.
+
+### Step 2 – Download the app
+
+1. Open <https://github.com/ebechalani/broadcast>.
+2. Click the green **Code** button, then **Download ZIP**.
+3. Open the downloaded `broadcast-main.zip` and drag the folder inside it to your **Documents** folder.
+4. Rename the folder to `broadcast` (optional, just shorter).
+
+### Step 3 – First start
+
+1. Open the `broadcast` folder.
+2. Double-click **`start.cmd`**.
+3. A black window opens and installs the app. The first time this takes **3 to 10 minutes** and downloads about 500 MB (it includes its own copy of the Chrome browser). Do not close the black window.
+4. When it is done, your browser opens the page **http://127.0.0.1:3210** by itself, and a second Chrome window titled *WhatsApp* appears. **Keep both open.** If the page did not open, type `127.0.0.1:3210` in your browser's address bar.
+
+If Windows shows a blue "Windows protected your PC" box when you double-click `start.cmd`, click **More info**, then **Run anyway**. The file only runs the app; you can open it in Notepad to see what it does.
+
+Every later start is the same: double-click `start.cmd`, wait a few seconds, the page opens.
+
+To stop the app: close the black window (or press Ctrl+C in it). Any campaign in progress pauses and is offered again at the next start.
+
+---
+
+## Part 3 – Link your WhatsApp number (once)
+
+1. On the page, in box **1 – Link your WhatsApp number**, click **Connect**.
+2. A QR code appears after a few seconds.
+3. On your phone, open **WhatsApp**:
+   - Android: tap the **⋮** menu (top right) → **Linked devices** → **Link a device**.
+   - iPhone: tap **Settings** (bottom right) → **Linked devices** → **Link a device**.
+4. Point the phone's camera at the QR code on the screen.
+5. Wait. The badge at the top of the page turns green and shows **Connected: +961…** with your number. Big accounts can take a minute to load.
+
+The link is remembered. The next time you start the app it reconnects by itself, without a QR code. You only scan again if you click **Unlink**, or if you remove the device from your phone (WhatsApp → Linked devices → tap the device → Log out).
+
+---
+
+## Part 4 – Prepare the contact list
+
+The app reads an Excel file (`.xlsx`) or a CSV file, or rows pasted straight from Excel.
+
+### How the file should look
+
+One line per person, with a header row on top. Example:
+
+| Prénom | Nom | Téléphone | Classe |
+| --- | --- | --- | --- |
+| Jean | Dupont | 70 123 456 | 6ème B |
+| Marie | Curie | +961 71 234 567 | 5ème A |
+
+Rules:
+
+- Column names can be in French or English: `Prénom / Nom / Téléphone`, `First name / Last name / Phone`, `Mobile`, `WhatsApp`, `Nom et Prénom`, `Mobile Père / Mobile Mère`… The app recognises them. If it guesses wrong you can correct it on the page.
+- Phone numbers can be written any way: `70 123 456`, `03-123-456`, `+961 70 123 456`, `0096170123456`. Numbers **without** a country code use the default country chosen on the page (Lebanon by default). Foreign numbers must have their country code (`+33 6…`).
+- Any extra column (Classe, Montant, Date…) can be used in the message as a placeholder.
+- A title line above the header (like "Liste des parents") is fine, the app skips it.
+
+### Loading it
+
+1. In box **2 – Contacts**, either drag your file onto the dotted area, or click the dotted area and choose the file, or copy the rows in Excel and paste them in the text box on the right, then click **Use pasted rows**.
+2. Check the line **Detected columns**: First name, Last name, Phone. If a column is wrong, change it in the drop-downs and click **Apply**.
+3. Look at the summary: **N ready**, and possibly **invalid** (bad or missing number) and **duplicate** (same number twice). Only *ready* contacts receive a message. The table shows every line with the reason when something is wrong, with the row number of your file so you can fix it in Excel and load again.
+4. If your numbers are not Lebanese, pick the right **Default country** before loading.
+
+---
+
+## Part 5 – Write the message
+
+1. In box **3 – Message**, type your text. Press Enter for new lines, exactly as you want it to appear in WhatsApp.
+2. To insert the person's name, click a blue chip such as **{{firstName}}** or type it yourself. Available placeholders:
+   - `{{firstName}}` – first name
+   - `{{lastName}}` – last name
+   - `{{fullName}}` – both
+   - `{{Classe}}` – or any other column of your file, written like the column title
+   - `{{firstName|Madame, Monsieur}}` – a fallback text used when the value is empty
+3. The **Preview** box shows the message as the first contact will receive it. Change the person in the drop-down to check others.
+4. Click **Send a test to myself**. The message arrives in your own WhatsApp (in the chat with yourself) so you can see the final result on a phone. Fix and test again until it is right.
+
+Writing tips that reduce the risk of being reported: say who you are in the first line, keep it short, make it clearly about something the person expects from you, and tell them they can reply.
+
+---
+
+## Part 6 – Settings (box 4, "Pacing & safety settings")
+
+The defaults are safe for a personal number. You can leave them as they are.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Min / Max delay between messages | 25 / 60 s | A random pause between these two values is made between every two messages. Do not go under 15 s. |
+| Messages per batch | 20 | After this many messages the app takes a longer break. |
+| Pause between batches | 5 min | Length of that break. |
+| Daily limit | 150 | Maximum messages per day, counted across all campaigns on this PC. When reached, the app waits and continues the next morning at 08:00. A new or little-used number should start at 20–30 a day and grow slowly over weeks. |
+| Retries per failed message | 1 | How many times a failed message is retried. |
+| Pause after N failures in a row | 3 | Safety brake: the campaign pauses itself. |
+| Pause after N "not on WhatsApp" in a row | 5 | Same brake for numbers that are not on WhatsApp (can also mean a connection problem). |
+| Skip numbers that are not on WhatsApp | on | Checks each number before sending. Keep it on. |
+| Show "typing…" | on | Shows the typing indicator for a few seconds before each message, like a person would. |
+| Do not send between | off | Quiet hours. Turn it on to be sure nothing goes out at night, for example 21:00 to 08:00. |
+
+With the defaults, 100 messages take about 1 h 30. That is intentional.
+
+Changes to these settings apply to the **next** campaign you start, not to one already running.
+
+---
+
+## Part 7 – Send
+
+1. Check the line under the settings: it tells you how many messages will go out and how long it will take.
+2. Click **Start sending** and confirm.
+3. Leave the PC on, the black window open, the WhatsApp Chrome window open, and the phone online. You can minimise the windows and do other work.
+4. Follow the progress: the green bar, the counter of sent / pending / failed, the countdown to the next message, and the table with one line per contact.
+
+While it runs:
+
+- **Pause** stops after the current message; **Resume** continues. Pausing and resuming never shortens the delays.
+- **Stop** ends the campaign; contacts not yet reached stay unsent.
+- If WhatsApp disconnects (phone offline, Wi-Fi drop), the campaign pauses by itself, the app tries to reconnect for a few minutes, and sending resumes automatically. If it gives up, click **Connect**.
+- If the campaign pauses with "N failures in a row", check that the phone is online and WhatsApp still works on it, then click **Resume**.
+
+---
+
+## Part 8 – After sending
+
+- **Export results** downloads a CSV with every contact and its status: sent (with the time), failed (with the reason), not on WhatsApp.
+- **Retry failed** puts the failed contacts back in the queue (and, if you accept, those reported as not on WhatsApp). Then click **Resume** to send them. A contact marked *Interrupted while sending* may already have received the message: check the chat on your phone before retrying it.
+- **New campaign** clears the panel for the next list.
+- The **Activity log** at the bottom shows everything that happened, in order.
+
+If the PC was switched off or the app closed during a campaign, the next start shows the unfinished campaign in box 4 with a **Resume** button.
+
+---
+
+## Part 9 – Using it on two PCs (you and your partner)
+
+Each PC runs its own copy: repeat Part 2 and Part 3 on the second PC. Nothing is shared between the two machines; each keeps its own session, settings and daily counter in its `data` folder.
+
+- **Each PC with its own WhatsApp number**: the simplest. Nothing to coordinate.
+- **Both PCs with the same number**: WhatsApp allows several linked devices, so each PC scans the same phone. But the daily limit is counted per PC, so set the **Daily limit on each PC to half** (75 and 75 instead of 150), and do not run campaigns on both PCs at the same time.
+
+To update the app later: download the ZIP again and replace all files **except the `data` folder**. If the installation seems broken after an update, delete the `node_modules` folder and double-click `start.cmd` again.
+
+---
+
+## Part 10 – Staying safe (read once, seriously)
+
+WhatsApp is not designed for bulk sending and bans numbers that look like robots. A ban is usually permanent for that number. What triggers it, in order of importance:
+
+1. **People reporting or blocking you.** Only write to people who expect to hear from you (parents, members, customers who gave you their number). Say who you are. Let them answer.
+2. **Writing to many people who do not have your number saved.** Ask them to save it (put it in your school communications).
+3. **Too many messages, too fast, every day.** Keep the defaults. Spread a big list over several days.
+4. **Identical text to everyone.** The first name already helps. Change the wording between campaigns.
+5. **Numbers that are not on WhatsApp.** Keep the check on.
+6. **A brand-new number** that immediately broadcasts. Use a number that has had normal conversations for a few weeks, and start with small batches (20–30 a day).
+
+For large or regular volumes, the only method WhatsApp allows is the official WhatsApp Business Platform (paid, with approved templates). This tool uses an unofficial method; it is against WhatsApp's terms of service and you use it at your own risk.
+
+---
+
+## Part 11 – Troubleshooting
+
+| Problem | What to do |
+| --- | --- |
+| Double-clicking `start.cmd` says Node.js is not installed | Do Part 2, Step 1, then try again. |
+| The black window shows "Port 3210 is already in use" | The app is already running in another window. Use that one, or close it first. |
+| The page does not open | Type `127.0.0.1:3210` in your browser. |
+| No QR code, "Could not start" | Close everything, start again. If it persists, install Google Chrome and start the app with the Chrome path: see "Configuration" in README.md. |
+| Stuck on "Loading WhatsApp…" | Wait one minute. Then click **Disconnect**, then **Connect**. |
+| A QR code appears although you had linked before | The phone removed this device, or the session expired. Scan again. |
+| "Reconnecting…" keeps failing | Make sure the phone is online and open WhatsApp on it once. After five tries the app waits for you to click **Connect**. |
+| Numbers shown as invalid | Check the Default country, or write the numbers with the country code (`+961 70 123 456`). |
+| Wrong columns detected | Fix them in **Detected columns** and click **Apply**. |
+| Messages fail with a technical error mentioning "evaluate" or "undefined" | WhatsApp Web changed and the library behind the app needs an update: in the project folder run `npm install` again (requires internet), then restart. |
+
+---
+
+## Quick reference – every time
+
+1. Double-click `start.cmd`, wait for the page.
+2. Badge green? If not, click **Connect** (scan if asked).
+3. Load the contact file, check the columns and the "ready" count.
+4. Write the message, check the preview, send a test to yourself.
+5. Check the settings line (number of messages and duration).
+6. **Start sending**, keep PC, windows and phone on.
+7. When finished: **Export results**, then **New campaign**.

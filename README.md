@@ -16,6 +16,8 @@ Everything runs locally on your computer. Nothing is sent to any server other th
 - A phone with WhatsApp (personal or WhatsApp Business app) that holds the number you want to send from. The phone must stay online while sending.
 - About 500 MB of disk space the first time: the tool downloads its own copy of Chromium to drive WhatsApp Web.
 
+**New here?** [GUIDE.md](GUIDE.md) is the complete step-by-step guide, from an empty PC to a sent campaign, written for non-technical users.
+
 ## Quick start
 
 On Windows, double-click **`start.cmd`**. It installs the dependencies the first time, starts the app and opens it in your browser.
