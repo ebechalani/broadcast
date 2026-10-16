@@ -104,6 +104,22 @@ The minimum delay also applies between two campaigns, and a message only counts 
 
 **The honest alternative:** for large or recurring volumes, use the official [WhatsApp Business Platform](https://business.whatsapp.com/products/business-platform) (Cloud API) with approved message templates. It costs money per conversation but it is the only method WhatsApp allows at scale.
 
+## Installing it on another PC
+
+The app is not hosted anywhere: every person runs their own copy on their own computer and links a number with their own phone. To set up a second PC:
+
+1. Install **Node.js** (LTS version) from <https://nodejs.org>. Accept the defaults in the installer.
+2. Get the project: on <https://github.com/ebechalani/broadcast> click **Code → Download ZIP** and unzip it somewhere like `Documents\broadcast`. (Or clone it with GitHub Desktop, which lets you pull updates later with one click.)
+3. Double-click **`start.cmd`**. The first start installs the dependencies and downloads the automation browser; it takes a few minutes and needs internet. Later starts take a few seconds.
+4. In the page that opens, click **Connect** and scan the QR code with the phone whose number will send.
+
+Each PC keeps its own `data/` folder: its own WhatsApp session, settings, campaigns and daily count. Two notes:
+
+- **Two PCs, two numbers** is the simple case: nothing to coordinate.
+- **Two PCs linked to the same number** also works (WhatsApp allows several linked devices), but the daily limit is counted per PC. Set each PC's daily limit to half (for example 75 each with the default 150) so the number as a whole stays within the limit, and avoid sending from both at the same time.
+
+To update a PC later, download the ZIP again (or pull in GitHub Desktop) and replace everything **except the `data/` folder**, then run `start.cmd`; if `package.json` changed, delete `node_modules` first so the dependencies are reinstalled.
+
 ## Where things are stored
 
 Everything lives in the `data/` folder next to the app (ignored by git):
