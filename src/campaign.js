@@ -5,18 +5,19 @@ const { render } = require('./template');
 
 // Conservative defaults for a personal number. See README "Staying safe".
 const DEFAULT_SETTINGS = Object.freeze({
-  minDelaySec: 25,          // random pause between two messages: at least this
-  maxDelaySec: 60,          // ... and at most this
-  batchSize: 20,            // after this many messages ...
-  batchPauseSec: 300,       // ... pause this long (randomized +/-20%)
-  dailyLimit: 150,          // never send more than this per calendar day (all campaigns)
-  checkRegistered: true,    // skip numbers that are not on WhatsApp instead of failing
-  simulateTyping: true,     // show "typing..." for a moment before each message
-  quietHoursEnabled: false, // do not send between quietStart and quietEnd
+  minDelaySec: 25,            // random pause between two messages: at least this
+  maxDelaySec: 60,            // ... and at most this
+  batchSize: 20,              // after this many messages ...
+  batchPauseSec: 300,         // ... pause this long (randomized +/-20%)
+  dailyLimit: 150,            // never send more than this per calendar day (all campaigns)
+  checkRegistered: true,      // skip numbers that are not on WhatsApp instead of failing
+  simulateTyping: true,       // show "typing..." for a moment before each message
+  quietHoursEnabled: false,   // do not send between quietStart and quietEnd
   quietStart: '21:00',
-  quietEnd: '08:00',
-  maxRetries: 1,            // retry a failed send this many times
-  maxConsecutiveFailures: 3 // pause the campaign after this many failures in a row
+  quietEnd: '08:00',          // also the earliest time a daily-limit wait resumes, even when quiet hours are off
+  maxRetries: 1,              // retry a failed send this many times
+  maxConsecutiveFailures: 3,  // pause the campaign after this many failures in a row
+  maxConsecutiveSkips: 5,     // pause after this many "not on WhatsApp" answers in a row
 });
 
 const LIMITS = {
@@ -27,7 +28,10 @@ const LIMITS = {
   dailyLimit: [1, 5000],
   maxRetries: [0, 5],
   maxConsecutiveFailures: [1, 50],
+  maxConsecutiveSkips: [1, 100],
 };
+
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function sanitizeSettings(input) {
   const src = input && typeof input === 'object' ? input : {};
@@ -48,11 +52,12 @@ function sanitizeSettings(input) {
     }
   }
   if (out.maxDelaySec < out.minDelaySec) out.maxDelaySec = out.minDelaySec;
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(out.quietStart)) out.quietStart = DEFAULT_SETTINGS.quietStart;
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(out.quietEnd)) out.quietEnd = DEFAULT_SETTINGS.quietEnd;
+  if (!TIME_RE.test(out.quietStart)) out.quietStart = DEFAULT_SETTINGS.quietStart;
+  if (!TIME_RE.test(out.quietEnd)) out.quietEnd = DEFAULT_SETTINGS.quietEnd;
   return out;
 }
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const randomBetween = (min, max) => min + Math.random() * (max - min);
 const jitter = (ms, ratio) => ms * (1 + randomBetween(-ratio, ratio));
 
@@ -64,7 +69,7 @@ function typingDuration(text) {
 
 function minutesOfDay(hhmm) {
   const [h, m] = String(hhmm).split(':').map(Number);
-  return h * 60 + m;
+  return (h || 0) * 60 + (m || 0);
 }
 
 /** Milliseconds until quiet hours end, or 0 if we are outside them. */
@@ -84,10 +89,22 @@ function quietHoursRemainingMs(settings, nowTs) {
 }
 
 function msUntilMidnight(nowTs) {
-  const d = new Date(nowTs);
-  const next = new Date(d);
+  const next = new Date(nowTs);
   next.setHours(24, 0, 5, 0); // a few seconds past midnight
   return next.getTime() - nowTs;
+}
+
+/**
+ * When the daily limit is reached we wait for the next day, but never resume in
+ * the middle of the night: sending restarts at quietEnd (08:00 by default) at
+ * the earliest, whether or not quiet hours are enabled.
+ */
+function dailyLimitWaitMs(settings, nowTs) {
+  const midnight = nowTs + msUntilMidnight(nowTs);
+  const resume = new Date(midnight);
+  const [h, m] = String(settings.quietEnd || DEFAULT_SETTINGS.quietEnd).split(':').map(Number);
+  resume.setHours(h || 0, m || 0, 0, 0);
+  return Math.max(midnight, resume.getTime()) - nowTs;
 }
 
 /** Rough duration estimate for n messages with these settings (ms). */
@@ -119,6 +136,7 @@ function toItem(contact, index) {
 }
 
 const TERMINAL = new Set(['done', 'stopped']);
+const INTERRUPTED_MESSAGE = 'Interrupted while sending. It may already have been delivered: check the chat before retrying.';
 
 /**
  * A campaign sends one rendered message per item, pacing itself according to
@@ -129,8 +147,11 @@ const TERMINAL = new Set(['done', 'stopped']);
  *   'change' -> whenever something worth persisting changed
  *
  * `client` must provide isReady(), resolveChatId(digits) -> chatId|null and
- * sendText(chatId, text, { simulateTyping, typingMs }) -> { id }.
- * `counter` (optional) must provide sentToday() and increment().
+ * sendText(chatId, text, { simulateTyping, typingMs, shouldAbort }) -> { id }.
+ * sendText may throw an error named 'AbortError' when shouldAbort() asked it to
+ * stop before the message went out, or one with code 'UNCONFIRMED' when the
+ * message may or may not have gone out.
+ * `counter` (optional) must provide sentToday(), increment() and lastSentAt().
  */
 class Campaign extends EventEmitter {
   constructor(opts) {
@@ -153,11 +174,14 @@ class Campaign extends EventEmitter {
     this.startedAt = o.startedAt || null;
     this.finishedAt = o.finishedAt || null;
     this.lastSentAt = o.lastSentAt || null;
-    this.sentSinceBatchPause = 0;
+    this.sentSinceBatchPause = Number(o.sentSinceBatchPause) || 0;
+    this.batchPauseUntil = Number(o.batchPauseUntil) || null;
     this.consecutiveFailures = 0;
+    this.consecutiveSkips = 0;
     this._waker = null;
     this._loopPromise = null;
-    this._persistCount = 0;
+    this._inFlight = null;
+    this._dailyLimitLogged = false;
   }
 
   // ----- lifecycle -----
@@ -174,6 +198,11 @@ class Campaign extends EventEmitter {
     this.state = 'running';
     this.pauseReason = null;
     this.autoPaused = false;
+    if (wasPaused) {
+      // A resume says "the cause has been dealt with": the in-a-row counters restart.
+      this.consecutiveFailures = 0;
+      this.consecutiveSkips = 0;
+    }
     if (!this.startedAt) this.startedAt = this.now();
     this._log('info', wasPaused ? `Resumed, ${pending} message(s) left` : `Started: ${pending} message(s) queued`);
     this._emitState();
@@ -212,21 +241,31 @@ class Campaign extends EventEmitter {
     if (wasIdle) this.emit('change');
   }
 
-  /** Put failed items back in the queue (does not resume by itself). */
-  retryFailed() {
+  /** Resolves once no send is in flight (or after timeoutMs). Call before tearing WhatsApp down. */
+  settle(timeoutMs) {
+    if (!this._inFlight) return Promise.resolve();
+    return Promise.race([this._inFlight.catch(() => {}), sleep(timeoutMs || 15000)]);
+  }
+
+  /** Put failed items (and optionally "not on WhatsApp" ones) back in the queue. Does not resume. */
+  retryFailed(options) {
+    const includeSkipped = Boolean(options && options.includeNotOnWhatsApp);
     let n = 0;
     this.items.forEach((item, index) => {
-      if (item.status === 'failed') {
+      if (item.status === 'failed' || (includeSkipped && item.status === 'not_on_whatsapp')) {
         item.status = 'pending';
         item.attempts = 0;
         item.error = null;
+        if (includeSkipped) item.chatId = null;
         n++;
         this.emit('item', { index, item });
       }
     });
     if (n) {
+      this.consecutiveFailures = 0;
+      this.consecutiveSkips = 0;
       if (TERMINAL.has(this.state)) { this.state = 'paused'; this.pauseReason = 'Ready to retry'; this.finishedAt = null; }
-      this._log('info', `${n} failed message(s) queued again`);
+      this._log('info', `${n} message(s) queued again`);
       this._emitState();
     }
     return n;
@@ -266,22 +305,36 @@ class Campaign extends EventEmitter {
     if (quietMs > 0) { await this._wait(quietMs, 'quiet hours'); return; }
 
     if (this.counter && this.counter.sentToday() >= this.settings.dailyLimit) {
-      this._log('warn', `Daily limit of ${this.settings.dailyLimit} reached, waiting for tomorrow`);
-      await this._wait(msUntilMidnight(this.now()), 'daily limit reached');
+      if (!this._dailyLimitLogged) {
+        this._dailyLimitLogged = true;
+        this._log('warn', `Daily limit of ${this.settings.dailyLimit} reached, waiting for tomorrow morning`);
+      }
+      await this._wait(dailyLimitWaitMs(this.settings, this.now()), 'daily limit reached');
       return;
     }
+    this._dailyLimitLogged = false;
 
+    // Batch pause as a deadline, so pause/resume or a restart cannot cut it short.
     if (this.settings.batchSize > 0 && this.sentSinceBatchPause >= this.settings.batchSize) {
-      this.sentSinceBatchPause = 0;
       if (this.settings.batchPauseSec > 0) {
-        await this._wait(jitter(this.settings.batchPauseSec * 1000, 0.2), 'batch pause');
-        return;
+        if (!this.batchPauseUntil) {
+          this.batchPauseUntil = this.now() + jitter(this.settings.batchPauseSec * 1000, 0.2);
+          this.emit('change');
+        }
+        const left = this.batchPauseUntil - this.now();
+        if (left > 0) { await this._wait(left, 'batch pause'); return; }
       }
+      this.sentSinceBatchPause = 0;
+      this.batchPauseUntil = null;
+      this.emit('change');
     }
 
-    // Never send two messages closer together than minDelay, even across pause/resume.
-    if (this.lastSentAt) {
-      const since = this.now() - this.lastSentAt;
+    // Never send two messages closer together than minDelay: not across
+    // pause/resume, not across campaigns (the counter remembers the last send).
+    const sharedLast = this.counter && typeof this.counter.lastSentAt === 'function' ? (this.counter.lastSentAt() || 0) : 0;
+    const last = Math.max(this.lastSentAt || 0, sharedLast);
+    if (last) {
+      const since = this.now() - last;
       const minGap = this.settings.minDelaySec * 1000;
       if (since < minGap) { await this._wait(minGap - since, 'next message'); return; }
     }
@@ -301,10 +354,17 @@ class Campaign extends EventEmitter {
     item.attempts += 1;
     item.error = null;
     this.emit('item', { index, item });
+    this.emit('change');
 
-    const { text } = render(this.template, item);
     const who = `${item.firstName} ${item.lastName}`.trim() || item.phoneDisplay;
+    const giveBack = () => {
+      item.status = 'pending';
+      item.attempts = Math.max(0, item.attempts - 1);
+      item.error = null;
+    };
+
     try {
+      const { text } = render(this.template, item);
       let chatId = item.chatId;
       if (!chatId) {
         if (this.settings.checkRegistered) {
@@ -312,8 +372,11 @@ class Campaign extends EventEmitter {
           if (!chatId) {
             item.status = 'not_on_whatsapp';
             item.error = 'Number is not registered on WhatsApp';
-            this.consecutiveFailures = 0;
+            this.consecutiveSkips += 1;
             this._log('warn', `Skipped ${who} (${item.phoneDisplay}): not on WhatsApp`);
+            if (this.consecutiveSkips >= this.settings.maxConsecutiveSkips) {
+              this.pause(`${this.consecutiveSkips} numbers in a row reported as not on WhatsApp. If they are landlines this is normal; otherwise check the WhatsApp connection. Resume to continue.`);
+            }
             this.emit('item', { index, item });
             this._emitState();
             return;
@@ -323,31 +386,65 @@ class Campaign extends EventEmitter {
         }
         item.chatId = chatId;
       }
-      const result = await this.client.sendText(chatId, text, {
+
+      // The user may have paused or stopped while the number was being checked.
+      if (this.state !== 'running') {
+        giveBack();
+        this.emit('item', { index, item });
+        this._emitState();
+        return;
+      }
+
+      this._inFlight = this.client.sendText(chatId, text, {
         simulateTyping: this.settings.simulateTyping,
         typingMs: typingDuration(text),
+        shouldAbort: () => this.state !== 'running',
       });
+      let result;
+      try { result = await this._inFlight; } finally { this._inFlight = null; }
+      if (!result || !result.id) {
+        const err = new Error('WhatsApp returned no message id, so the send is not confirmed');
+        err.code = 'UNCONFIRMED';
+        throw err;
+      }
+
       item.status = 'sent';
       item.sentAt = this.now();
-      item.messageId = result && result.id ? result.id : null;
+      item.messageId = result.id;
       this.lastSentAt = item.sentAt;
       this.sentSinceBatchPause += 1;
       this.consecutiveFailures = 0;
+      this.consecutiveSkips = 0;
       if (this.counter) this.counter.increment();
       this._log('success', `Sent to ${who} (${item.phoneDisplay})`);
     } catch (err) {
-      const message = err && err.message ? err.message : String(err);
-      item.error = message;
-      this.consecutiveFailures += 1;
-      if (item.attempts <= this.settings.maxRetries) {
-        item.status = 'pending';
-        this._log('warn', `Failed for ${who}: ${message}. Will retry.`);
+      if (err && err.name === 'AbortError') {
+        giveBack();
+        this._log('info', `Message to ${who} was cancelled before it went out`);
       } else {
-        item.status = 'failed';
-        this._log('error', `Failed for ${who}: ${message}`);
-      }
-      if (this.consecutiveFailures >= this.settings.maxConsecutiveFailures) {
-        this.pause(`${this.consecutiveFailures} failures in a row. Check the WhatsApp connection before resuming.`);
+        const message = err && err.message ? err.message : String(err);
+        this.consecutiveFailures += 1;
+        if (err && err.code === 'UNCONFIRMED') {
+          // The message may still have gone out: do not retry automatically,
+          // and pace/count as if it had been sent.
+          item.status = 'failed';
+          item.error = `${message}. Check the chat before retrying.`;
+          this.lastSentAt = this.now();
+          this.sentSinceBatchPause += 1;
+          if (this.counter) this.counter.increment();
+          this._log('error', `No confirmation for ${who} (${item.phoneDisplay}): ${message}`);
+        } else if (item.attempts <= this.settings.maxRetries) {
+          item.status = 'pending';
+          item.error = message;
+          this._log('warn', `Failed for ${who}: ${message}. Will retry.`);
+        } else {
+          item.status = 'failed';
+          item.error = message;
+          this._log('error', `Failed for ${who}: ${message}`);
+        }
+        if (this.consecutiveFailures >= this.settings.maxConsecutiveFailures) {
+          this.pause(`${this.consecutiveFailures} failures in a row. Check the WhatsApp connection before resuming.`);
+        }
       }
     }
     this.emit('item', { index, item });
@@ -369,11 +466,10 @@ class Campaign extends EventEmitter {
   // ----- waiting helpers -----
 
   _wait(ms, label) {
-    const duration = Math.max(0, Math.round(ms));
+    const duration = Number.isFinite(ms) ? Math.max(0, Math.round(ms)) : 0;
     return new Promise(resolve => {
       const until = this.now() + duration;
       this.waiting = { label, until, ms: duration };
-      this._emitState();
       let timer = null;
       const finish = () => {
         if (timer) clearTimeout(timer);
@@ -381,8 +477,10 @@ class Campaign extends EventEmitter {
         this.waiting = null;
         resolve();
       };
+      // Install the waker before anyone can react to the state event.
       this._waker = finish;
       timer = setTimeout(finish, duration);
+      this._emitState();
     });
   }
 
@@ -432,6 +530,8 @@ class Campaign extends EventEmitter {
       startedAt: this.startedAt,
       finishedAt: this.finishedAt,
       lastSentAt: this.lastSentAt,
+      sentSinceBatchPause: this.sentSinceBatchPause,
+      batchPauseUntil: this.batchPauseUntil,
       estimatedRemainingMs: estimateDurationMs(this.counts().pending, this.settings),
     };
     if (withItems) {
@@ -454,22 +554,25 @@ class Campaign extends EventEmitter {
 
   static fromJSON(json, deps) {
     const d = deps || {};
-    const items = (json.items || []).map(i => ({
-      ...i,
-      // A send that was in flight when the app stopped is retried.
-      status: i.status === 'sending' ? 'pending' : i.status,
-    }));
+    const items = (json.items || []).map(i => {
+      if (i.status !== 'sending') return { ...i };
+      // A send that was in flight when the app stopped may or may not have gone
+      // out. Never re-send it silently: surface it and let the user decide.
+      return { ...i, status: 'failed', error: INTERRUPTED_MESSAGE };
+    });
     const c = new Campaign({
       id: json.id,
       name: json.name,
       template: json.template,
-      settings: json.settings,
+      settings: sanitizeSettings(json.settings),
       items,
       logs: json.logs,
       createdAt: json.createdAt,
       startedAt: json.startedAt,
       finishedAt: json.finishedAt,
       lastSentAt: json.lastSentAt,
+      sentSinceBatchPause: json.sentSinceBatchPause,
+      batchPauseUntil: json.batchPauseUntil,
       client: d.client,
       counter: d.counter,
       now: d.now,
@@ -502,9 +605,11 @@ module.exports = {
   Campaign,
   DEFAULT_SETTINGS,
   LIMITS,
+  INTERRUPTED_MESSAGE,
   sanitizeSettings,
   estimateDurationMs,
   quietHoursRemainingMs,
   msUntilMidnight,
+  dailyLimitWaitMs,
   typingDuration,
 };

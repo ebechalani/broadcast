@@ -6,10 +6,21 @@ const { normKey } = require('./template');
 
 const FIRST_NAMES = ['firstname', 'first', 'prenom', 'prenoms', 'givenname', 'forename', 'firstnames', 'prenomeleve', 'prenomparent'];
 const LAST_NAMES = ['lastname', 'last', 'surname', 'nom', 'noms', 'famille', 'nomdefamille', 'familyname', 'family', 'nomeleve', 'nomparent'];
-const FULL_NAMES = ['name', 'fullname', 'nomcomplet', 'nomprenom', 'prenomnom', 'nometprenom', 'contact', 'eleve', 'student', 'parent', 'personne'];
+const FULL_NAMES = ['name', 'fullname', 'nomcomplet', 'nomprenom', 'prenomnom', 'nometprenom', 'prenometnom', 'contact', 'eleve', 'student', 'parent', 'personne'];
 const PHONES = ['phone', 'phonenumber', 'telephone', 'tel', 'numero', 'numerodetelephone', 'mobile', 'whatsapp', 'whatsappnumber', 'number', 'gsm', 'cell', 'cellphone', 'portable', 'numwhatsapp', 'mobilephone', 'telwhatsapp', 'numerowhatsapp'];
 
+// "(^|[^a])tel" keeps "Atelier" out while matching "Tel", "Téléphone", "Tél. parent".
+const PHONE_FUZZY = /(whatsapp|phone|mobile|numero|gsm|portable|cell|(^|[^a])tel)/;
+const FIRST_FUZZY = /(prenom|first|given)/;
+const LAST_FUZZY = /(surname|lastname|^last|^famille$|nomdefamille|familyname)/;
+// One column holding the whole name: "Nom et Prénom", "Nom Prénom", "Prénom Nom", "Nom complet".
+const COMBINED_NAME = /(nom.*prenom|prenom.*nom|fullname|nomcomplet)/;
+const ALL_KEYWORDS = new Set([...FIRST_NAMES, ...LAST_NAMES, ...FULL_NAMES, ...PHONES]);
+// Header cells usually start with or contain one of these.
+const HEADER_HINT = /^(tel|nom|prenom|numero|mobile|whatsapp|phone|first|last|surname|name|gsm|portable|contact|eleve|parent|classe|email|mail)|(whatsapp|phone|mobile|numero|telephone|prenom|surname|lastname|firstname)/;
+
 const SPREADSHEET_EXT = /\.(xlsx|xlsm|xls|ods|xlsb)$/i;
+const MAX_ROWS = 50000;
 
 function isBlank(v) {
   return v === undefined || v === null || String(v).trim() === '';
@@ -17,7 +28,11 @@ function isBlank(v) {
 
 function cellToString(v) {
   if (typeof v === 'number') return toRawString(v);
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return '';
+    const p = n => String(n).padStart(2, '0');
+    return `${p(v.getDate())}/${p(v.getMonth() + 1)}/${v.getFullYear()}`;
+  }
   return isBlank(v) ? '' : String(v).trim();
 }
 
@@ -38,13 +53,13 @@ function decodeText(buffer) {
   try { return new TextDecoder('windows-1252').decode(buffer); } catch { return buffer.toString('latin1'); }
 }
 
-/** Turn an uploaded file or pasted text into a matrix of strings (rows x columns). */
+/** Turn an uploaded file or pasted text into a matrix of strings (rows x columns), blank rows included. */
 function toMatrix({ buffer, filename, text }) {
   if (buffer && filename && SPREADSHEET_EXT.test(filename)) {
-    const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false });
+    const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws) return [];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '', blankrows: true });
     return rows.map(r => r.map(cellToString));
   }
   let csv = text;
@@ -53,32 +68,66 @@ function toMatrix({ buffer, filename, text }) {
   }
   csv = String(csv).replace(/^﻿/, '');
   if (!csv.trim()) return [];
-  const result = Papa.parse(csv, {
-    header: false,
-    skipEmptyLines: 'greedy',
-    delimitersToGuess: [',', ';', '\t', '|'],
-  });
-  return result.data.map(r => r.map(cellToString));
+  // Guess the delimiter on the non-empty lines (blank lines would skew the guess),
+  // then parse everything, blank lines included, so row numbers match the file.
+  const probe = Papa.parse(csv.slice(0, 100000), { header: false, skipEmptyLines: 'greedy', preview: 50, delimitersToGuess: [',', ';', '\t', '|'] });
+  const delimiter = (probe.meta && probe.meta.delimiter) || ';';
+  const result = Papa.parse(csv, { header: false, skipEmptyLines: false, delimiter });
+  const rows = result.data.map(r => r.map(cellToString));
+  // Drop the empty row a trailing newline produces.
+  while (rows.length && rows[rows.length - 1].every(c => c === '')) rows.pop();
+  return rows;
 }
 
-function dropEmptyRowsAndColumns(matrix) {
-  const rows = matrix.filter(r => r.some(c => !isBlank(c)));
-  if (!rows.length) return [];
-  const width = Math.max(...rows.map(r => r.length));
-  const keep = [];
+/** Remove blank rows and columns but remember each row's original (0-based) index. */
+function compact(matrix) {
+  const kept = [];
+  matrix.forEach((r, i) => { if (r.some(c => !isBlank(c))) kept.push({ cells: r, src: i }); });
+  if (!kept.length) return { rows: [], srcRows: [] };
+  const width = kept.reduce((w, r) => Math.max(w, r.cells.length), 0);
+  const keepCols = [];
   for (let c = 0; c < width; c++) {
-    if (rows.some(r => !isBlank(r[c]))) keep.push(c);
+    if (kept.some(r => !isBlank(r.cells[c]))) keepCols.push(c);
   }
-  return rows.map(r => keep.map(c => (r[c] === undefined ? '' : r[c])));
+  return {
+    rows: kept.map(r => keepCols.map(c => (r.cells[c] === undefined ? '' : r.cells[c]))),
+    srcRows: kept.map(r => r.src),
+  };
 }
 
-/** A first row with no phone-like cell is treated as a header row. */
+function headerScore(row) {
+  let score = 0;
+  for (const cell of row) {
+    if (isBlank(cell) || looksLikePhone(cell)) continue;
+    const key = normKey(cell);
+    if (!key) continue;
+    if (ALL_KEYWORDS.has(key) || HEADER_HINT.test(key)) score++;
+  }
+  return score;
+}
+
+/**
+ * Find the header row among the first rows: the one with the most header-like
+ * words (school exports often start with a title row). Returns -1 when the
+ * data has no header.
+ */
+function findHeaderRow(rows) {
+  const limit = Math.min(rows.length, 10);
+  let best = -1, bestScore = 0;
+  for (let i = 0; i < limit; i++) {
+    if (rows[i].some(looksLikePhone)) continue;
+    const s = headerScore(rows[i]);
+    if (s > bestScore) { best = i; bestScore = s; }
+  }
+  if (best >= 0) return best;
+  // No recognisable header words: a first row without any phone is still most likely a header.
+  if (rows.length > 1 && !rows[0].some(looksLikePhone)) return 0;
+  return -1;
+}
+
+/** Kept for compatibility: true when the first row looks like a header. */
 function detectHeader(rows) {
-  if (!rows.length) return false;
-  const first = rows[0];
-  if (first.some(looksLikePhone)) return false;
-  if (rows.length === 1) return false;
-  return true;
+  return findHeaderRow(rows) >= 0;
 }
 
 function positionalHeaders(width) {
@@ -106,32 +155,57 @@ function guessPhoneColumn(headers, rows) {
 
 /**
  * Work out which column holds which field.
- * Returns { firstName, lastName, fullName, phone } with header names (or null).
+ * Returns { firstName, lastName, fullName, phone, phoneFallbacks } with header names (or null).
  */
 function detectMapping(headers, rows, hasHeader) {
-  const norm = headers.map(h => ({ raw: h, key: normKey(h) }));
-  const exact = list => { const hit = norm.find(h => list.includes(h.key)); return hit ? hit.raw : null; };
-  const fuzzy = re => { const hit = norm.find(h => re.test(h.key)); return hit ? hit.raw : null; };
+  const norm = headers.map((h, i) => ({ raw: h, key: normKey(h), i }));
+  const score = i => phoneScore(rows, i);
 
-  let phone = null, firstName = null, lastName = null, fullName = null;
-
+  // Phone: columns named like a phone, but only if their content agrees
+  // ("Numéro" is often a row index, "WhatsApp" often holds oui/non).
+  let phone = null;
+  const byName = [
+    ...norm.filter(h => PHONES.includes(h.key)),
+    ...norm.filter(h => !PHONES.includes(h.key) && PHONE_FUZZY.test(h.key)),
+  ];
   if (hasHeader) {
-    phone = exact(PHONES) || fuzzy(/(whatsapp|tel|phone|mobile|numero|gsm|portable|cell)/);
-    firstName = exact(FIRST_NAMES) || fuzzy(/(prenom|first|given)/);
-    lastName = exact(LAST_NAMES) || fuzzy(/(surname|lastname|last|famil)/);
-    if (!lastName) {
-      const nomCol = norm.find(h => h.key === 'nom' || /^noms?(de)?(famille)?$/.test(h.key));
-      if (nomCol && nomCol.raw !== firstName) lastName = nomCol.raw;
+    const hit = byName.find(h => score(h.i) >= 0.5);
+    phone = hit ? hit.raw : null;
+  }
+  if (!phone) phone = guessPhoneColumn(headers, rows);
+  if (!phone && hasHeader && byName.length) phone = byName[0].raw;
+
+  let firstName = null, lastName = null, fullName = null;
+  if (hasHeader) {
+    const free = h => h.raw !== phone;
+    const notCombined = h => !COMBINED_NAME.test(h.key);
+    const exact = list => norm.find(h => free(h) && list.includes(h.key) && notCombined(h));
+
+    const f = exact(FIRST_NAMES) || norm.find(h => free(h) && notCombined(h) && FIRST_FUZZY.test(h.key));
+    firstName = f ? f.raw : null;
+
+    let l = exact(LAST_NAMES) || norm.find(h => free(h) && h.raw !== firstName && notCombined(h) && LAST_FUZZY.test(h.key));
+    if (!l) {
+      // "Nom", "Nom de l'élève", "Nom du père": prefer the one that mirrors the first-name column.
+      const nomCols = norm.filter(h => free(h) && h.raw !== firstName && notCombined(h) && /^noms?(?!bre)/.test(h.key));
+      if (nomCols.length) {
+        const suffix = firstName ? normKey(firstName).replace(/^prenoms?/, '') : null;
+        l = (suffix !== null && nomCols.find(h => h.key.replace(/^noms?/, '') === suffix)) || nomCols[0];
+      }
     }
+    lastName = l ? l.raw : null;
+
     // "Nom" alone, without a first-name column, is usually the full name.
     if (lastName && !firstName && /^noms?$/.test(normKey(lastName))) {
       fullName = lastName; lastName = null;
     }
-    if (!firstName && !lastName) {
-      fullName = fullName || exact(FULL_NAMES) || fuzzy(/(name|nom|eleve|student|parent|contact)/);
+    if (!firstName && !lastName && !fullName) {
+      const full = norm.find(h => free(h) && COMBINED_NAME.test(h.key))
+        || norm.find(h => free(h) && FULL_NAMES.includes(h.key))
+        || norm.find(h => free(h) && /(name|nom|eleve|student|parent|contact)/.test(h.key));
+      fullName = full ? full.raw : null;
     }
   }
-  if (!phone) phone = guessPhoneColumn(headers, rows);
 
   if (!hasHeader || (!firstName && !lastName && !fullName)) {
     // Positional fallback: the non-phone, mostly-text columns in order.
@@ -143,14 +217,19 @@ function detectMapping(headers, rows, hasHeader) {
       else if (textCols.length === 1) { fullName = textCols[0]; }
     }
   }
+
   // A column may only play one role.
-  const roles = ['phone', 'firstName', 'lastName', 'fullName'];
   const picked = { phone, firstName, lastName, fullName };
   const used = new Set();
-  for (const role of roles) {
+  for (const role of ['phone', 'firstName', 'lastName', 'fullName']) {
     if (picked[role] && used.has(picked[role])) picked[role] = null;
     if (picked[role]) used.add(picked[role]);
   }
+
+  // Other columns that hold numbers ("Mobile Mère" next to "Mobile Père") are used when the main one is empty.
+  picked.phoneFallbacks = norm
+    .filter(h => !used.has(h.raw) && score(h.i) >= 0.5)
+    .map(h => h.raw);
   return picked;
 }
 
@@ -184,6 +263,8 @@ function titleCaseIfShouting(s) {
   return str;
 }
 
+const EMPTY_MAPPING = { firstName: null, lastName: null, fullName: null, phone: null, phoneFallbacks: [] };
+
 /**
  * Parse an upload into contacts.
  * @param {{buffer?: Buffer, filename?: string, text?: string}} input
@@ -191,13 +272,31 @@ function titleCaseIfShouting(s) {
  */
 function parseContacts(input, options = {}) {
   const defaultCountry = (options.defaultCountry || 'LB').toUpperCase();
-  const matrix = dropEmptyRowsAndColumns(toMatrix(input));
-  if (!matrix.length) {
-    return { contacts: [], headers: [], mapping: { firstName: null, lastName: null, fullName: null, phone: null }, hasHeader: false, stats: { total: 0, ok: 0, invalid: 0, duplicate: 0 } };
+  const { rows: all, srcRows: allSrc } = compact(toMatrix(input));
+  if (!all.length) {
+    return { contacts: [], headers: [], extraHeaders: [], mapping: { ...EMPTY_MAPPING }, hasHeader: false, headerRow: null, stats: { total: 0, ok: 0, invalid: 0, duplicate: 0 } };
   }
-  const hasHeader = typeof options.hasHeader === 'boolean' ? options.hasHeader : detectHeader(matrix);
-  const width = Math.max(...matrix.map(r => r.length));
-  let headers = hasHeader ? matrix[0].map((h, i) => (isBlank(h) ? `Column ${i + 1}` : String(h).trim())) : positionalHeaders(width);
+  if (all.length > MAX_ROWS) {
+    const err = new Error(`Too many rows (${all.length}). The limit is ${MAX_ROWS}; split the file.`);
+    err.status = 413;
+    throw err;
+  }
+
+  let headerIndex;
+  if (typeof options.hasHeader === 'boolean') {
+    headerIndex = options.hasHeader ? Math.max(0, findHeaderRow(all)) : -1;
+  } else {
+    headerIndex = findHeaderRow(all);
+  }
+  const hasHeader = headerIndex >= 0;
+  const rows = hasHeader ? all.slice(headerIndex + 1) : all;
+  const srcRows = hasHeader ? allSrc.slice(headerIndex + 1) : allSrc;
+  const width = all.reduce((w, r) => Math.max(w, r.length), 0);
+
+  let headers = hasHeader
+    ? all[headerIndex].map((h, i) => (isBlank(h) ? `Column ${i + 1}` : String(h).trim()))
+    : positionalHeaders(width);
+  while (headers.length < width) headers.push(`Column ${headers.length + 1}`);
   // De-duplicate header names.
   const seenHeaders = new Map();
   headers = headers.map(h => {
@@ -205,19 +304,23 @@ function parseContacts(input, options = {}) {
     seenHeaders.set(h, n + 1);
     return n ? `${h} (${n + 1})` : h;
   });
-  const rows = hasHeader ? matrix.slice(1) : matrix;
 
-  let mapping = detectMapping(headers, rows, hasHeader);
+  const mapping = detectMapping(headers, rows, hasHeader);
   if (options.mapping && typeof options.mapping === 'object') {
     for (const role of ['firstName', 'lastName', 'fullName', 'phone']) {
-      if (role in options.mapping) {
-        const v = options.mapping[role];
-        mapping[role] = v && headers.includes(v) ? v : null;
-      }
+      if (!(role in options.mapping)) continue;
+      const v = options.mapping[role];
+      // null clears the role; a name that no longer exists (header toggled) keeps the detection.
+      if (v === null || v === '') mapping[role] = null;
+      else if (headers.includes(v)) mapping[role] = v;
     }
+    const chosen = new Set(['phone', 'firstName', 'lastName', 'fullName'].map(r => mapping[r]).filter(Boolean));
+    mapping.phoneFallbacks = (mapping.phoneFallbacks || []).filter(h => !chosen.has(h));
   }
+
   const col = name => (name ? headers.indexOf(name) : -1);
   const idx = { firstName: col(mapping.firstName), lastName: col(mapping.lastName), fullName: col(mapping.fullName), phone: col(mapping.phone) };
+  const fallbackIdx = (mapping.phoneFallbacks || []).map(col).filter(i => i >= 0);
   const roleCols = new Set(Object.values(idx).filter(i => i >= 0));
   const extraHeaders = headers.filter((h, i) => !roleCols.has(i));
 
@@ -238,17 +341,29 @@ function parseContacts(input, options = {}) {
     const extra = {};
     headers.forEach((h, c) => { if (!roleCols.has(c)) extra[h] = row[c] === undefined ? '' : String(row[c]).trim(); });
 
-    const rawPhone = idx.phone >= 0 ? row[idx.phone] : '';
-    const phone = normalizePhone(rawPhone, defaultCountry);
+    // Main phone column first, then any other column that holds numbers.
+    const candidates = [idx.phone, ...fallbackIdx].filter(c => c >= 0);
+    let phone = null, firstAttempt = null, usedCol = -1, rawPhone = '';
+    for (const c of candidates) {
+      const raw = row[c];
+      if (isBlank(raw)) continue;
+      const r = normalizePhone(raw, defaultCountry);
+      if (!firstAttempt) { firstAttempt = r; rawPhone = toRawString(raw); }
+      if (r.ok) { phone = r; usedCol = c; rawPhone = toRawString(raw); break; }
+    }
+    if (!phone) phone = firstAttempt || { ok: false, reason: 'empty', input: '' };
+    const rowNumber = (srcRows[i] !== undefined ? srcRows[i] : i) + 1;
+
     const contact = {
       id: `c${i + 1}`,
-      row: i + (hasHeader ? 2 : 1),
+      row: rowNumber,
       firstName,
       lastName,
-      rawPhone: toRawString(rawPhone),
+      rawPhone,
       phone: phone.ok ? phone.digits : null,
       e164: phone.ok ? phone.e164 : null,
-      phoneDisplay: phone.ok ? phone.display : toRawString(rawPhone),
+      phoneDisplay: phone.ok ? phone.display : rawPhone,
+      phoneSource: phone.ok && usedCol >= 0 && usedCol !== idx.phone ? headers[usedCol] : null,
       country: phone.ok ? phone.country : null,
       phoneValid: phone.ok ? phone.valid : false,
       status: 'ok',
@@ -257,13 +372,17 @@ function parseContacts(input, options = {}) {
     };
     if (!phone.ok) {
       contact.status = 'invalid';
-      contact.reason = idx.phone < 0 ? 'no phone column' : phone.reason;
+      contact.reason = idx.phone < 0 && !fallbackIdx.length ? 'no phone column' : phone.reason;
     } else if (seenPhones.has(phone.digits)) {
       contact.status = 'duplicate';
       contact.reason = `same number as row ${seenPhones.get(phone.digits)}`;
     } else {
       seenPhones.set(phone.digits, contact.row);
-      if (!phone.valid) contact.reason = 'unusual length for this country, will be checked on WhatsApp';
+      const notes = [];
+      if (contact.phoneSource) notes.push(`number taken from "${contact.phoneSource}"`);
+      if (phone.note) notes.push(phone.note);
+      if (!phone.valid) notes.push('unusual length for this country, will be checked on WhatsApp');
+      contact.reason = notes.length ? notes.join('; ') : null;
     }
     contacts.push(contact);
   });
@@ -274,7 +393,15 @@ function parseContacts(input, options = {}) {
     invalid: contacts.filter(c => c.status === 'invalid').length,
     duplicate: contacts.filter(c => c.status === 'duplicate').length,
   };
-  return { contacts, headers, extraHeaders, mapping, hasHeader, stats };
+  return {
+    contacts,
+    headers,
+    extraHeaders,
+    mapping,
+    hasHeader,
+    headerRow: hasHeader ? allSrc[headerIndex] + 1 : null,
+    stats,
+  };
 }
 
-module.exports = { parseContacts, detectMapping, detectHeader, splitFullName, toMatrix, decodeText };
+module.exports = { parseContacts, detectMapping, detectHeader, findHeaderRow, splitFullName, toMatrix, decodeText };

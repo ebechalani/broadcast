@@ -154,7 +154,7 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .preview { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .preview-head { display: flex; gap: 10px; align-items: center; padding: 8px 12px; background: var(--gray-soft); font-size: 13px; color: var(--muted); }
-.preview-head select { width: auto; max-width: 320px; padding: 4px 8px; font-size: 13px; }
+.preview-head select { flex: 0 1 320px; min-width: 0; width: auto; padding: 4px 8px; font-size: 13px; }
 .preview-text { margin: 0; padding: 14px; white-space: pre-wrap; font: inherit; min-height: 60px; background: var(--card); }
 .warn { background: var(--warn-bg); color: var(--warn-text); padding: 8px 12px; border-radius: 9px; }
 

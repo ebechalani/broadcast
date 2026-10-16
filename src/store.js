@@ -32,13 +32,29 @@ function localDateKey(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** Counts messages sent per local calendar day, across campaigns and restarts. */
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Counts messages sent per local calendar day, across campaigns and restarts,
+ * and remembers when the last message went out so the minimum gap between two
+ * messages also holds across campaigns.
+ */
 class DailyCounter {
   constructor(file, now = Date.now) {
     this.store = new JsonFile(file);
     this.now = now;
-    this.counts = this.store.read({});
-    if (typeof this.counts !== 'object' || this.counts === null) this.counts = {};
+    const raw = this.store.read({});
+    this.days = {};
+    this._lastSentAt = null;
+    if (raw && typeof raw === 'object') {
+      if (raw.days && typeof raw.days === 'object') {
+        for (const [k, v] of Object.entries(raw.days)) if (DAY_KEY.test(k)) this.days[k] = Number(v) || 0;
+        this._lastSentAt = Number(raw.lastSentAt) || null;
+      } else {
+        // Legacy flat format: { "2026-10-16": 12 }
+        for (const [k, v] of Object.entries(raw)) if (DAY_KEY.test(k)) this.days[k] = Number(v) || 0;
+      }
+    }
   }
 
   todayKey() {
@@ -46,17 +62,22 @@ class DailyCounter {
   }
 
   sentToday() {
-    return Number(this.counts[this.todayKey()]) || 0;
+    return Number(this.days[this.todayKey()]) || 0;
+  }
+
+  lastSentAt() {
+    return this._lastSentAt;
   }
 
   increment(n = 1) {
     const key = this.todayKey();
-    this.counts[key] = (Number(this.counts[key]) || 0) + n;
+    this.days[key] = (Number(this.days[key]) || 0) + n;
+    this._lastSentAt = this.now();
     // Keep only the last 60 days.
-    const keys = Object.keys(this.counts).sort();
-    while (keys.length > 60) delete this.counts[keys.shift()];
-    try { this.store.write(this.counts); } catch { /* best effort */ }
-    return this.counts[key];
+    const keys = Object.keys(this.days).sort();
+    while (keys.length > 60) delete this.days[keys.shift()];
+    try { this.store.write({ days: this.days, lastSentAt: this._lastSentAt }); } catch { /* best effort */ }
+    return this.days[key];
   }
 }
 
@@ -87,7 +108,7 @@ class CampaignStore {
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }
 
-  /** Most recent campaign that still has messages to send. */
+  /** Most recent campaign that still has messages to send (or an interrupted send to review). */
   latestUnfinished() {
     return this.list().find(c => c.state !== 'done' && c.state !== 'stopped'
       && Array.isArray(c.items) && c.items.some(i => i.status === 'pending' || i.status === 'sending')) || null;

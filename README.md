@@ -37,7 +37,7 @@ Then open <http://127.0.0.1:3210> if it does not open by itself.
 1. **Link your WhatsApp number.** Click *Connect*. On your phone open WhatsApp → *Linked devices* → *Link a device* and scan the code. The badge turns green and shows your number. Next time the app starts it reconnects by itself.
 2. **Contacts.** Drop a `.csv` or `.xlsx` file, or paste rows copied from Excel. Check the detected columns and fix them if needed. Invalid and duplicate numbers are flagged and skipped. Pick the default country used for numbers written without a country code (Lebanon by default).
 3. **Message.** Type your text. Click a placeholder chip to insert it. The preview shows the message for a real contact. *Send a test to myself* delivers it to your own number so you can see it on your phone.
-4. **Send.** Review the pacing settings, click *Start sending*, and keep the window open. You can pause or stop at any time; the progress table shows what happened to each contact.
+4. **Send.** Review the pacing settings, click *Start sending*, and keep the window open. You can pause or stop at any time; the progress table shows what happened to each contact. *Retry failed* puts failed contacts back in the queue (and, if you choose, the ones reported as not on WhatsApp); press *Resume* to send them.
 
 A sample file is in `samples/contacts-sample.csv` (also downloadable from the app).
 
@@ -60,7 +60,7 @@ Jean;Dupont;0096170123456
 Jean	Dupont	70 123 456        (pasted from Excel, no header row)
 ```
 
-Numbers may be written with spaces, dashes, dots, parentheses, `+` or `00`. Numbers without a country code use the default country selected in the app. Numbers with a different country code (`+33 6…`) are kept as they are. A single "Nom" column containing `DUPONT Jean` is split into first and last name.
+Numbers may be written with spaces, dashes, dots, parentheses, `+` or `00`, with Arabic digits, or two numbers in one cell (the first valid one is used). Numbers without a country code use the default country selected in the app. Numbers with a different country code (`+33 6…`) are kept as they are. A single "Nom" or "Nom et Prénom" column containing `DUPONT Jean` is split into first and last name. Title rows above the real header are skipped. When a file has several phone columns (for example *Mobile Père* and *Mobile Mère*), the first one is used and the others fill in when it is empty; the contacts table says which column a number came from. Row numbers in the table refer to the rows of your file.
 
 ### Placeholders
 
@@ -92,14 +92,15 @@ The defaults are deliberately conservative for a personal number:
 | --- | --- | --- |
 | Delay between messages | 25–60 s, random | Below 15 s looks automated |
 | Batch | 20 messages, then a 5-minute pause | Keeps the hourly rate low |
-| Daily limit | 150, all campaigns together | Many users stay under 100; a new number should start at 20–30 a day and grow slowly |
+| Daily limit | 150, all campaigns together | Many users stay under 100; a new number should start at 20–30 a day and grow slowly. When the limit is reached the campaign waits and continues the next morning at the quiet-hours end time (08:00 by default), never in the middle of the night |
 | Quiet hours | off | Enable it to avoid sending at night |
 | Number check | on | Skips numbers that are not on WhatsApp |
 | Typing indicator | on | Shows "typing…" for a few seconds before each message |
+| Failure brakes | 3 failures in a row, or 5 "not on WhatsApp" in a row | The campaign pauses itself so a broken session cannot burn through the list |
 
 With these defaults 100 messages take roughly 1 h 30. That is the point.
 
-If a campaign starts failing repeatedly it pauses itself after 3 failures in a row. If WhatsApp disconnects, it pauses and resumes when the connection is back.
+The minimum delay also applies between two campaigns, and a message only counts as sent once WhatsApp has confirmed it. If WhatsApp disconnects, the campaign pauses, the app tries to reconnect a few times over several minutes, and sending resumes by itself once the connection is back. If the app is closed while a message is going out, that contact is shown as *failed* with an "interrupted" note after the restart: check the chat on your phone before using *Retry failed*, so nobody receives the message twice.
 
 **The honest alternative:** for large or recurring volumes, use the official [WhatsApp Business Platform](https://business.whatsapp.com/products/business-platform) (Cloud API) with approved message templates. It costs money per conversation but it is the only method WhatsApp allows at scale.
 
@@ -135,7 +136,8 @@ The automated Chrome window is **visible by default** (a separate window titled 
 
 - **The QR code never appears / "Could not start"** – the bundled Chromium failed to launch. Install Google Chrome and set `CHROME_PATH`, or run `npx puppeteer browsers install chrome` in the project folder.
 - **Stuck on "Loading WhatsApp…"** – wait a minute; big accounts take time to sync. If it stays stuck, click *Disconnect* then *Connect*.
-- **"Authentication failed"** – the saved session is no longer valid (you unlinked the device from the phone). Click *Unlink*, then *Connect* and scan again.
+- **A QR code appears although you had already linked** – the phone removed this device (Linked devices → Log out) or the session expired. Scan again; the campaign resumes afterwards.
+- **"Reconnecting…" keeps failing** – check that the phone is online and WhatsApp is open on it at least once; after five attempts the app stops retrying and waits for you to click *Connect*.
 - **Messages fail with "Evaluation failed" or similar** – WhatsApp Web changed and the `whatsapp-web.js` library needs an update: run `npm update whatsapp-web.js` and restart.
 - **Numbers show as invalid** – check the default country, or write them with the country code (`+961 70 123 456`).
 

@@ -8,7 +8,7 @@ test('CSV with English headers and comma delimiter', () => {
   const text = 'First name,Last name,WhatsApp\nJean,Dupont,+961 70 123 456\nMarie,Curie,03 123 456\n';
   const r = parseContacts({ text }, { defaultCountry: 'LB' });
   assert.equal(r.hasHeader, true);
-  assert.deepEqual(r.mapping, { phone: 'WhatsApp', firstName: 'First name', lastName: 'Last name', fullName: null });
+  assert.deepEqual(r.mapping, { phone: 'WhatsApp', firstName: 'First name', lastName: 'Last name', fullName: null, phoneFallbacks: [] });
   assert.equal(r.contacts.length, 2);
   assert.equal(r.contacts[0].firstName, 'Jean');
   assert.equal(r.contacts[0].lastName, 'Dupont');
@@ -93,6 +93,80 @@ test('Windows-1252 and UTF-16 CSV exports are decoded correctly', () => {
   const r2 = parseContacts({ buffer: utf16, filename: 'liste.txt' }, { defaultCountry: 'LB' });
   assert.equal(r2.contacts[0].firstName, 'Jérôme');
   assert.equal(r2.contacts[0].phone, '96170123456');
+});
+
+test('title and blank rows above the real header are skipped and row numbers stay true', () => {
+  const text = 'Liste des élèves 2025-2026\n\nNom;Prénom;Classe;Tel\nDUPONT;Jean;6ème B;70123456\n\nCURIE;Marie;5ème A;71234567\nX;Y;4ème;70123456\n';
+  const r = parseContacts({ text }, { defaultCountry: 'LB' });
+  assert.equal(r.headerRow, 3);
+  assert.equal(r.mapping.lastName, 'Nom');
+  assert.equal(r.mapping.firstName, 'Prénom');
+  assert.equal(r.mapping.phone, 'Tel');
+  assert.equal(r.contacts.length, 3);
+  assert.equal(r.contacts[0].firstName, 'Jean');
+  assert.equal(r.contacts[0].row, 4);
+  assert.equal(r.contacts[1].row, 6);
+  assert.equal(r.contacts[2].status, 'duplicate');
+  assert.match(r.contacts[2].reason, /row 4/);
+});
+
+test('phone column named like a phone but holding other data is not used', () => {
+  const r1 = parseContacts({ text: 'Numéro;Nom;Prénom;Tél\n1;DUPONT;Jean;70123456\n2;CURIE;Marie;71234567\n' }, { defaultCountry: 'LB' });
+  assert.equal(r1.mapping.phone, 'Tél');
+  assert.equal(r1.stats.ok, 2);
+  const r2 = parseContacts({ text: 'Nom;Prénom;WhatsApp;Téléphone\nDUPONT;Jean;oui;70123456\n' }, { defaultCountry: 'LB' });
+  assert.equal(r2.mapping.phone, 'Téléphone');
+  const r3 = parseContacts({ text: 'Nom;Prénom;Atelier;Numéro WhatsApp Parent\nDUPONT;Jean;Théâtre;70123456\n' }, { defaultCountry: 'LB' });
+  assert.equal(r3.mapping.phone, 'Numéro WhatsApp Parent');
+});
+
+test('combined "Nom et Prénom" column is split, "Nom de l\'élève" pairs with "Prénom de l\'élève"', () => {
+  const r1 = parseContacts({ text: 'Nom et Prénom;Numéro\nDUPONT Jean;70123456\nABOU KHALIL Marie Rose;71234567\n' }, { defaultCountry: 'LB' });
+  assert.equal(r1.mapping.fullName, 'Nom et Prénom');
+  assert.equal(r1.contacts[0].firstName, 'Jean');
+  assert.equal(r1.contacts[0].lastName, 'Dupont');
+  assert.equal(r1.contacts[1].firstName, 'Marie Rose');
+  assert.equal(r1.contacts[1].lastName, 'Abou Khalil');
+  const r2 = parseContacts({ text: "Nom de l'élève;Prénom de l'élève;Situation familiale;Tel parent\nDUPONT;Jean;Mariés;70123456\n" }, { defaultCountry: 'LB' });
+  assert.equal(r2.mapping.lastName, "Nom de l'élève");
+  assert.equal(r2.mapping.firstName, "Prénom de l'élève");
+  assert.equal(r2.contacts[0].lastName, 'Dupont');
+  assert.equal(r2.contacts[0].extra['Situation familiale'], 'Mariés');
+});
+
+test('second phone column is used when the first is empty', () => {
+  const text = 'Nom;Prénom;Mobile Père;Mobile Mère\nDUPONT;Jean;70123456;71234567\nCURIE;Marie;;76123456\nHASSAN;Ali;;\n';
+  const r = parseContacts({ text }, { defaultCountry: 'LB' });
+  assert.equal(r.mapping.phone, 'Mobile Père');
+  assert.deepEqual(r.mapping.phoneFallbacks, ['Mobile Mère']);
+  assert.equal(r.contacts[0].phone, '96170123456');
+  assert.equal(r.contacts[0].phoneSource, null);
+  assert.equal(r.contacts[1].phone, '96176123456');
+  assert.equal(r.contacts[1].phoneSource, 'Mobile Mère');
+  assert.match(r.contacts[1].reason, /Mobile Mère/);
+  assert.equal(r.contacts[2].status, 'invalid');
+  assert.equal(r.contacts[2].reason, 'empty');
+});
+
+test('stale mapping names (after a header toggle) keep the detection instead of wiping it', () => {
+  const text = 'Nom;Prénom;Tel\nDUPONT;Jean;70123456\n';
+  const r = parseContacts({ text }, { defaultCountry: 'LB', hasHeader: false, mapping: { firstName: 'Prénom', lastName: 'Nom', phone: 'Tel', fullName: null } });
+  assert.equal(r.hasHeader, false);
+  assert.equal(r.mapping.phone, 'Column 3');
+  assert.equal(r.contacts.length, 2);
+});
+
+test('Excel date cells are rendered as dd/mm/yyyy', () => {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['Prénom', 'Nom', 'Tel', 'Date de naissance'],
+    ['Jean', 'Dupont', 70123456, new Date(2010, 4, 14)],
+  ], { cellDates: true });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Contacts');
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', cellDates: true });
+  const r = parseContacts({ buffer, filename: 'liste.xlsx' }, { defaultCountry: 'LB' });
+  assert.equal(r.contacts[0].extra['Date de naissance'], '14/05/2010');
+  assert.equal(r.contacts[0].phone, '96170123456');
 });
 
 test('empty input', () => {

@@ -23,6 +23,7 @@
 </header>
 
 <main class="layout">
+  <div id="offline-banner" class="warn" hidden>Connection to the app lost. Is the server window still open? The page reconnects by itself when it is back.</div>
 
   <!-- 1. Connection -->
   <section class="card" id="card-connect">
@@ -167,12 +168,15 @@
         <label class="field"><span>Pause between batches (min)</span><input type="number" id="s-batchPauseMin" min="0" max="1440" step="0.5"></label>
         <label class="field"><span>Daily limit (all campaigns)</span><input type="number" id="s-dailyLimit" min="1" max="5000"></label>
         <label class="field"><span>Retries per failed message</span><input type="number" id="s-maxRetries" min="0" max="5"></label>
+        <label class="field"><span>Pause after N failures in a row</span><input type="number" id="s-maxConsecutiveFailures" min="1" max="50"></label>
+        <label class="field"><span>Pause after N "not on WhatsApp" in a row</span><input type="number" id="s-maxConsecutiveSkips" min="1" max="100"></label>
         <label class="check"><input type="checkbox" id="s-checkRegistered"> Skip numbers that are not on WhatsApp</label>
         <label class="check"><input type="checkbox" id="s-simulateTyping"> Show "typing…" before each message</label>
         <label class="check"><input type="checkbox" id="s-quietHoursEnabled"> Do not send between
           <input type="time" id="s-quietStart"> and <input type="time" id="s-quietEnd"></label>
       </div>
       <div id="settings-warn" class="warn small" hidden></div>
+      <div id="settings-note" class="muted small" hidden></div>
       <div class="safety-tips">
         <b>Staying safe.</b> WhatsApp bans numbers that behave like bots: many messages in a short time, identical text, messages to people who never saved your number, and recipients tapping <i>Report</i> or <i>Block</i>. Keep the random delay, keep batches small, stay well under 200 messages a day on a personal number (far less on a brand-new one), write a message people expect from you, and let them reply or opt out. Prefer sending to people who already have your number saved. Unofficial automation is against WhatsApp's terms; for large volumes use the official WhatsApp Business Platform.
       </div>

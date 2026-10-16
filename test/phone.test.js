@@ -40,6 +40,18 @@ test('garbage is rejected with a reason', () => {
   assert.equal(normalizePhone(null, 'LB').ok, false);
 });
 
+test('invisible marks, Arabic digits and several numbers in one cell', () => {
+  assert.equal(normalizePhone('‎+961 70 123 456', 'LB').digits, '96170123456');
+  assert.equal(normalizePhone('‪+961 70 123 456‬', 'LB').digits, '96170123456');
+  assert.equal(normalizePhone('70​123​456', 'LB').digits, '96170123456');
+  assert.equal(normalizePhone('٧٠١٢٣٤٥٦', 'LB').digits, '96170123456');
+  const multi = normalizePhone('70 123 456 / 71 234 567', 'LB');
+  assert.equal(multi.digits, '96170123456');
+  assert.match(multi.note, /several numbers/);
+  assert.equal(normalizePhone('14/05/2010', 'LB').ok, false);
+  assert.equal(normalizePhone('2024-01-01', 'LB').reason, 'looks like a date or an amount');
+});
+
 test('looksLikePhone', () => {
   assert.equal(looksLikePhone('+961 70 123 456'), true);
   assert.equal(looksLikePhone('70123456'), true);

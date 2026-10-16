@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Campaign, sanitizeSettings, quietHoursRemainingMs, estimateDurationMs } = require('../src/campaign');
+const { Campaign, sanitizeSettings, quietHoursRemainingMs, estimateDurationMs, dailyLimitWaitMs, INTERRUPTED_MESSAGE } = require('../src/campaign');
 
 function fakeClient(options) {
   const o = options || {};
@@ -9,16 +9,20 @@ function fakeClient(options) {
     ready: o.ready !== false,
     sent: [],
     checks: [],
+    sendDelayMs: o.sendDelayMs || 0,
     isReady() { return this.ready; },
     async resolveChatId(digits) {
       this.checks.push(digits);
       if (o.notRegistered && o.notRegistered.includes(digits)) return null;
       return `${digits}@c.us`;
     },
-    async sendText(chatId, text) {
+    async sendText(chatId, text, opts) {
+      if (this.sendDelayMs) await sleep(this.sendDelayMs);
+      if (opts && opts.shouldAbort && opts.shouldAbort()) { const e = new Error('cancelled'); e.name = 'AbortError'; throw e; }
       if (o.failFor && o.failFor.includes(chatId)) throw new Error('boom');
       if (o.failTimes && o.failTimes[chatId] > 0) { o.failTimes[chatId]--; throw new Error('transient'); }
-      this.sent.push({ chatId, text });
+      if (o.unconfirmedFor && o.unconfirmedFor.includes(chatId)) return { id: null };
+      this.sent.push({ chatId, text, at: Date.now() });
       return { id: `msg${this.sent.length}` };
     },
   };
@@ -26,7 +30,12 @@ function fakeClient(options) {
 }
 
 function fakeCounter(initial) {
-  return { n: initial || 0, sentToday() { return this.n; }, increment() { this.n++; } };
+  return {
+    n: initial || 0, last: null,
+    sentToday() { return this.n; },
+    increment() { this.n++; this.last = Date.now(); },
+    lastSentAt() { return this.last; },
+  };
 }
 
 const contacts = [
@@ -61,6 +70,17 @@ test('numbers that are not on WhatsApp are skipped without counting as failures'
   assert.equal(c.items[1].status, 'not_on_whatsapp');
 });
 
+test('many "not on WhatsApp" answers in a row pause the campaign', async () => {
+  const client = fakeClient({ notRegistered: ['96170000001', '96170000002', '96170000003'] });
+  const c = new Campaign({ template: 'x', contacts, settings: { ...fast, maxConsecutiveSkips: 2 }, client });
+  const loop = c.start();
+  await waitFor(() => c.state === 'paused');
+  assert.match(c.pauseReason, /2 numbers in a row/);
+  assert.equal(c.items[2].status, 'pending');
+  c.stop();
+  await loop;
+});
+
 test('checkRegistered=false sends directly to the c.us id', async () => {
   const client = fakeClient();
   const c = new Campaign({ template: 'x', contacts: contacts.slice(0, 1), settings: { ...fast, checkRegistered: false }, client });
@@ -81,17 +101,31 @@ test('transient failure is retried once, permanent failure is recorded', async (
   assert.equal(c.state, 'done');
 });
 
-test('too many consecutive failures pauses the campaign', async () => {
+test('a send without a message id is recorded as failed, not retried, and still counted', async () => {
+  const client = fakeClient({ unconfirmedFor: ['96170000002@c.us'] });
+  const counter = fakeCounter();
+  const c = new Campaign({ template: 'x', contacts, settings: { ...fast, maxRetries: 2, maxConsecutiveFailures: 10 }, client, counter });
+  await c.start();
+  assert.equal(c.items[1].status, 'failed');
+  assert.equal(c.items[1].attempts, 1);
+  assert.match(c.items[1].error, /not confirmed/);
+  assert.equal(counter.n, 3, 'unconfirmed sends count toward the daily limit');
+  assert.equal(client.sent.length, 2);
+});
+
+test('too many consecutive failures pauses the campaign; resume resets the counter', async () => {
   const client = fakeClient({ failFor: ['96170000001@c.us', '96170000002@c.us', '96170000003@c.us'] });
   const c = new Campaign({ template: 'x', contacts, settings: { ...fast, maxRetries: 0, maxConsecutiveFailures: 2 }, client });
   const loop = c.start();
   await waitFor(() => c.state === 'paused');
   assert.match(c.pauseReason, /2 failures in a row/);
   assert.equal(c.autoPaused, false);
-  c.stop();
-  await loop;
-  assert.equal(c.state, 'stopped');
   assert.equal(c.items[2].status, 'pending');
+  c.resume();
+  assert.equal(c.consecutiveFailures, 0);
+  await loop;
+  assert.equal(c.state, 'done');
+  assert.equal(c.items[2].status, 'failed');
 });
 
 test('pause and resume, and stop ends the loop', async () => {
@@ -112,6 +146,19 @@ test('pause and resume, and stop ends the loop', async () => {
   assert.equal(c.counts().pending, 1);
 });
 
+test('stop during a send cancels it before it goes out', async () => {
+  const client = fakeClient({ sendDelayMs: 150 });
+  const c = new Campaign({ template: 'x', contacts, settings: fast, client });
+  const loop = c.start();
+  await waitFor(() => c.items[0].status === 'sending');
+  c.stop();
+  await c.settle(2000);
+  await loop;
+  assert.equal(client.sent.length, 0);
+  assert.equal(c.items[0].status, 'pending');
+  assert.equal(c.items[0].attempts, 0);
+});
+
 test('pauses automatically when WhatsApp is not connected and resumes when it is back', async () => {
   const client = fakeClient({ ready: false });
   const c = new Campaign({ template: 'x', contacts: contacts.slice(0, 1), settings: fast, client });
@@ -124,54 +171,86 @@ test('pauses automatically when WhatsApp is not connected and resumes when it is
   assert.equal(c.state, 'done');
 });
 
-test('daily limit stops sending for the day', async () => {
+test('daily limit stops sending for the day and resumes no earlier than quietEnd', async () => {
   const client = fakeClient();
   const counter = fakeCounter(0);
   const c = new Campaign({ template: 'x', contacts, settings: { ...fast, dailyLimit: 2 }, client, counter });
   const loop = c.start();
   await waitFor(() => c.waiting && c.waiting.label === 'daily limit reached');
   assert.equal(client.sent.length, 2);
+  const resumeAt = new Date(c.waiting.until);
+  assert.ok(resumeAt.getHours() >= 8, `resumes at ${resumeAt.toTimeString()}`);
   c.stop();
+  await loop;
+
+  const noon = new Date(2026, 0, 10, 12, 0, 0).getTime();
+  const resume = new Date(noon + dailyLimitWaitMs({ quietEnd: '08:00' }, noon));
+  assert.equal(resume.getDate(), 11);
+  assert.equal(resume.getHours(), 8);
+});
+
+test('minimum gap also holds against the shared counter (previous campaign)', async () => {
+  const client = fakeClient();
+  const counter = fakeCounter();
+  counter.last = Date.now();
+  const c = new Campaign({ template: 'x', contacts: contacts.slice(0, 1), settings: { ...fast, minDelaySec: 0.3, maxDelaySec: 0.3 }, client, counter });
+  const t0 = Date.now();
+  await c.start();
+  assert.ok(client.sent[0].at - t0 >= 250, `first send waited ${client.sent[0].at - t0} ms`);
+});
+
+test('batch pause happens after batchSize messages and survives pause/resume', async () => {
+  const client = fakeClient();
+  const c = new Campaign({ template: 'x', contacts, settings: { ...fast, batchSize: 2, batchPauseSec: 0.4 }, client });
+  const loop = c.start();
+  await waitFor(() => c.waiting && c.waiting.label === 'batch pause');
+  const deadline = c.batchPauseUntil;
+  assert.ok(deadline > Date.now());
+  c.pause('test');
+  await sleep(50);
+  c.resume();
+  await waitFor(() => client.sent.length === 3, 3000);
+  assert.ok(client.sent[2].at >= deadline - 5, 'third message waited for the original batch deadline');
   await loop;
 });
 
-test('batch pause happens after batchSize messages', async () => {
-  const client = fakeClient();
-  const c = new Campaign({ template: 'x', contacts, settings: { ...fast, batchSize: 2, batchPauseSec: 0.3 }, client });
-  const labels = [];
-  c.on('state', s => { if (s.waiting) labels.push(s.waiting.label); });
-  await c.start();
-  assert.ok(labels.includes('batch pause'), `labels: ${labels.join(',')}`);
-  assert.equal(client.sent.length, 3);
-});
-
-test('serialises and restores with in-flight items back to pending', async () => {
+test('serialises and restores: in-flight items become failed and are not re-sent', async () => {
   const client = fakeClient();
   const c = new Campaign({ template: 'Hello {{firstName}}', contacts, settings: fast, client });
   c.items[0].status = 'sent';
   c.items[1].status = 'sending';
   c.state = 'running';
+  c.sentSinceBatchPause = 7;
   const json = JSON.parse(JSON.stringify(c.toJSON()));
   assert.equal(json.state, 'paused');
   const restored = Campaign.fromJSON(json, { client });
   assert.equal(restored.state, 'paused');
-  assert.equal(restored.items[1].status, 'pending');
+  assert.equal(restored.items[1].status, 'failed');
+  assert.equal(restored.items[1].error, INTERRUPTED_MESSAGE);
+  assert.equal(restored.sentSinceBatchPause, 7);
   assert.equal(restored.template, 'Hello {{firstName}}');
   await restored.start();
   assert.equal(restored.state, 'done');
-  assert.equal(client.sent.length, 2);
+  assert.equal(client.sent.length, 1);
+  assert.equal(client.sent[0].chatId, '96170000003@c.us');
 });
 
-test('retryFailed re-queues failed items', async () => {
-  const client = fakeClient({ failFor: ['96170000002@c.us'] });
+test('restored settings are sanitized', () => {
+  const restored = Campaign.fromJSON({ id: 'x', items: [], settings: { minDelaySec: 0, maxDelaySec: 'abc' } }, {});
+  assert.equal(restored.settings.minDelaySec, 3);
+  assert.equal(restored.settings.maxDelaySec, 60);
+});
+
+test('retryFailed re-queues failed items and optionally skipped ones', async () => {
+  const client = fakeClient({ failFor: ['96170000002@c.us'], notRegistered: ['96170000003'] });
   const c = new Campaign({ template: 'x', contacts, settings: { ...fast, maxRetries: 0, maxConsecutiveFailures: 10 }, client });
   await c.start();
   assert.equal(c.items[1].status, 'failed');
-  client.sent = [];
-  delete client.failFor;
-  const n = c.retryFailed();
-  assert.equal(n, 1);
+  assert.equal(c.items[2].status, 'not_on_whatsapp');
+  assert.equal(c.retryFailed(), 1);
   assert.equal(c.state, 'paused');
+  assert.equal(c.retryFailed({ includeNotOnWhatsApp: true }), 1);
+  assert.equal(c.counts().pending, 2);
 });
 
 test('sanitizeSettings clamps and fixes ordering', () => {
@@ -182,6 +261,7 @@ test('sanitizeSettings clamps and fixes ordering', () => {
   assert.equal(s.dailyLimit, 5000);
   assert.equal(s.checkRegistered, false);
   assert.equal(s.quietStart, '21:00');
+  assert.equal(s.maxConsecutiveSkips, 5);
 });
 
 test('quiet hours across midnight', () => {

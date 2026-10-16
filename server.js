@@ -16,10 +16,16 @@ const { JsonFile, DailyCounter, CampaignStore } = require('./src/store');
 const WhatsApp = require('./src/whatsapp');
 
 fs.mkdirSync(config.dataDir, { recursive: true });
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // ----- state -----
 const settingsFile = new JsonFile(path.join(config.dataDir, 'settings.json'));
-let settings = { ...DEFAULT_SETTINGS, defaultCountry: config.defaultCountry, ...settingsFile.read({}) };
+function loadSettings() {
+  const saved = settingsFile.read({}) || {};
+  const country = String(saved.defaultCountry || config.defaultCountry).toUpperCase();
+  return { ...sanitizeSettings(saved), defaultCountry: /^[A-Z]{2}$/.test(country) ? country : 'LB' };
+}
+let settings = loadSettings();
 const counter = new DailyCounter(path.join(config.dataDir, 'daily-counts.json'));
 const campaigns = new CampaignStore(path.join(config.dataDir, 'campaigns'));
 const wa = new WhatsApp({
@@ -30,6 +36,7 @@ const wa = new WhatsApp({
 
 let campaign = null;
 let waState = { ...wa.snapshot(), qrDataUrl: null };
+let shuttingDown = false;
 const serverLogs = [];
 
 function log(level, message, source) {
@@ -41,36 +48,44 @@ function log(level, message, source) {
   io.emit('log', entry);
 }
 
-// ----- http + sockets -----
-// The server only listens on 127.0.0.1, but any website open in the user's browser
-// could still send requests to localhost. Browsers attach an Origin header to such
-// cross-site requests (and to WebSocket upgrades), so we only accept our own origin.
+// ----- request guard -----
+// The server only listens on 127.0.0.1, but any website open in the user's
+// browser could still send requests to localhost, and a DNS-rebound page could
+// even read the answers. Browsers attach Origin / Sec-Fetch-Site headers to
+// such requests, so every API and socket request must look like it comes from
+// our own page.
 const allowedHosts = new Set([`127.0.0.1:${config.port}`, `localhost:${config.port}`, `[::1]:${config.port}`]);
+if (config.port === 80 || config.port === 443) ['127.0.0.1', 'localhost', '[::1]'].forEach(h => allowedHosts.add(h));
 function isAllowedOrigin(origin) {
   try { return allowedHosts.has(new URL(origin).host.toLowerCase()); } catch { return false; }
 }
+function isAllowedRequest(req) {
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!allowedHosts.has(host)) return false;
+  const origin = req.headers.origin;
+  if (origin && !isAllowedOrigin(origin)) return false;
+  const site = req.headers['sec-fetch-site'];
+  return !site || site === 'same-origin' || site === 'none';
+}
 
+// ----- http + sockets -----
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   serveClient: true,
   allowRequest: (req, callback) => {
-    const origin = req.headers.origin;
-    const ok = !origin || isAllowedOrigin(origin);
-    callback(ok ? null : 'Forbidden origin', ok);
+    const ok = isAllowedRequest(req);
+    callback(ok ? null : 'Forbidden', ok);
   },
+});
+io.engine.use((req, res, next) => {
+  if (isAllowedRequest(req)) return next();
+  res.writeHead(403);
+  res.end();
 });
 
 app.disable('x-powered-by');
-app.use('/api', (req, res, next) => {
-  const host = String(req.headers.host || '').toLowerCase();
-  if (!allowedHosts.has(host)) return res.status(403).json({ error: 'Forbidden host' });
-  const origin = req.headers.origin;
-  if (origin && !isAllowedOrigin(origin)) return res.status(403).json({ error: 'Forbidden origin' });
-  const fetchSite = req.headers['sec-fetch-site'];
-  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return res.status(403).json({ error: 'Forbidden' });
-  return next();
-});
+app.use('/api', (req, res, next) => (isAllowedRequest(req) ? next() : res.status(403).json({ error: 'Forbidden' })));
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
@@ -91,7 +106,31 @@ io.on('connection', socket => {
   socket.emit('state', fullState());
 });
 
-// ----- WhatsApp events -----
+// ----- WhatsApp events + bounded auto-reconnect -----
+const RECONNECT_DELAYS_SEC = [15, 30, 60, 120, 300];
+let reconnect = { attempt: 0, timer: null };
+
+function cancelReconnect(resetAttempts) {
+  if (reconnect.timer) clearTimeout(reconnect.timer);
+  reconnect.timer = null;
+  if (resetAttempts) reconnect.attempt = 0;
+}
+
+function scheduleReconnect() {
+  if (reconnect.timer || shuttingDown) return;
+  if (reconnect.attempt >= RECONNECT_DELAYS_SEC.length) {
+    log('warn', 'Gave up reconnecting automatically. Click Connect to try again.');
+    return;
+  }
+  const delay = RECONNECT_DELAYS_SEC[reconnect.attempt++];
+  log('info', `Will try to reconnect in ${delay} s (attempt ${reconnect.attempt} of ${RECONNECT_DELAYS_SEC.length})`);
+  reconnect.timer = setTimeout(() => {
+    reconnect.timer = null;
+    if (wa.client || wa.manualDisconnect || shuttingDown) return;
+    wa.connect().catch(err => log('error', `Reconnect failed: ${err.message}`));
+  }, delay * 1000);
+}
+
 wa.on('log', e => log(e.level, e.message, 'whatsapp'));
 wa.on('status', async snap => {
   const next = { ...snap, qrDataUrl: null };
@@ -100,6 +139,11 @@ wa.on('status', async snap => {
   }
   waState = next;
   io.emit('wa', waState);
+
+  if (snap.status === 'ready') cancelReconnect(true);
+  if (snap.status === 'disconnected' && !snap.manualDisconnect && snap.lastDisconnectReason !== 'LOGOUT' && wa.hasSavedSession()) {
+    scheduleReconnect();
+  }
 
   if (campaign) {
     if (snap.status === 'ready' && campaign.state === 'paused' && campaign.autoPaused) {
@@ -120,26 +164,39 @@ function scheduleSave() {
     if (campaign) {
       try { campaigns.save(campaign); } catch (err) { log('error', `Could not save campaign: ${err.message}`); }
     }
-  }, 400);
+  }, 300);
 }
 function saveNow() {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   if (campaign) { try { campaigns.save(campaign); } catch { /* ignore */ } }
 }
 
+function campaignEvent(snap) {
+  return { ...snap, sentToday: counter.sentToday() };
+}
+
 function attachCampaign(c) {
   campaign = c;
-  c.on('state', snap => io.emit('campaign', snap));
-  c.on('item', payload => io.emit('campaign:item', payload));
+  c.on('state', snap => io.emit('campaign', campaignEvent(snap)));
+  c.on('item', payload => io.emit('campaign:item', { ...payload, sentToday: counter.sentToday() }));
   c.on('log', entry => io.emit('log', { ...entry, source: 'campaign' }));
   c.on('change', scheduleSave);
-  io.emit('campaign', c.snapshot());
+  io.emit('campaign', campaignEvent(c.snapshot()));
 }
 
 const restored = campaigns.latestUnfinished();
 if (restored) {
   attachCampaign(Campaign.fromJSON(restored, { client: wa, counter }));
-  log('info', `Found an unfinished campaign "${campaign.name}" (${campaign.counts().pending} left). Resume it from the Send panel.`);
+  const c = campaign.counts();
+  log('info', `Found an unfinished campaign "${campaign.name}" (${c.pending} left${c.failed ? `, ${c.failed} to review` : ''}). Resume it from the Send panel.`);
+}
+
+/** Pause the campaign and wait for a message that is going out right now. */
+async function quiesceCampaign(reason) {
+  if (!campaign) return;
+  if (campaign.state === 'running') campaign.pause(reason, { auto: false });
+  try { await campaign.settle(15000); } catch { /* ignore */ }
+  saveNow();
 }
 
 // ----- API -----
@@ -156,24 +213,26 @@ app.put('/api/settings', wrap((req, res) => {
   const body = req.body || {};
   const clean = sanitizeSettings({ ...settings, ...body });
   const country = String(body.defaultCountry || settings.defaultCountry || config.defaultCountry).toUpperCase();
-  settings = { ...clean, defaultCountry: /^[A-Z]{2}$/.test(country) ? country : config.defaultCountry };
+  settings = { ...clean, defaultCountry: /^[A-Z]{2}$/.test(country) ? country : settings.defaultCountry };
   settingsFile.write(settings);
   io.emit('settings', settings);
   res.json(settings);
 }));
 
 app.post('/api/wa/connect', wrap(async (req, res) => {
-  if (wa.client) return res.json(waState);
-  wa.connect().catch(err => log('error', `connect: ${err.message}`));
+  cancelReconnect(true);
+  if (!wa.client) wa.connect().catch(err => log('error', `connect: ${err.message}`));
   res.json({ ...wa.snapshot(), qrDataUrl: null });
 }));
 app.post('/api/wa/disconnect', wrap(async (req, res) => {
-  if (campaign && campaign.state === 'running') campaign.pause('WhatsApp disconnected by user');
+  cancelReconnect(true);
+  await quiesceCampaign('WhatsApp disconnected by user');
   await wa.disconnect();
   res.json(waState);
 }));
 app.post('/api/wa/logout', wrap(async (req, res) => {
-  if (campaign && campaign.state === 'running') campaign.pause('WhatsApp unlinked by user');
+  cancelReconnect(true);
+  await quiesceCampaign('WhatsApp unlinked by user');
   await wa.logout();
   res.json(waState);
 }));
@@ -188,8 +247,7 @@ app.post('/api/contacts/parse', upload.single('file'), wrap((req, res) => {
     ? { buffer: req.file.buffer, filename: req.file.originalname }
     : { text: String(body.text || '') };
   if (!req.file && !input.text.trim()) throw fail(400, 'Upload a file or paste some rows first');
-  const result = parseContacts(input, { defaultCountry, mapping, hasHeader });
-  res.json(result);
+  res.json(parseContacts(input, { defaultCountry, mapping, hasHeader }));
 }));
 
 app.post('/api/preview', wrap((req, res) => {
@@ -208,12 +266,14 @@ app.post('/api/campaign/start', wrap((req, res) => {
   if (campaign && (campaign.state === 'running' || campaign.state === 'paused' || campaign.state === 'idle')) {
     throw fail(409, 'A campaign is already in progress. Stop or discard it first.');
   }
+  if (campaign && campaign.counts().sending > 0) throw fail(409, 'A message is still being sent. Try again in a few seconds.');
   if (!wa.isReady()) throw fail(400, 'Connect WhatsApp first');
   const template = String(body.template || '').trim();
   if (!template) throw fail(400, 'The message is empty');
   const contacts = (Array.isArray(body.contacts) ? body.contacts : []).filter(c => c && c.status === 'ok' && c.phone);
   if (!contacts.length) throw fail(400, 'No valid contacts to send to');
   const campaignSettings = sanitizeSettings({ ...settings, ...(body.settings || {}) });
+  if (campaign) campaign.removeAllListeners();
   const c = new Campaign({ name: body.name, template, contacts, settings: campaignSettings, client: wa, counter });
   attachCampaign(c);
   saveNow();
@@ -241,13 +301,16 @@ app.post('/api/campaign/stop', wrap((req, res) => {
 }));
 app.post('/api/campaign/retry-failed', wrap((req, res) => {
   if (!campaign) throw fail(404, 'No campaign');
-  const n = campaign.retryFailed();
-  if (n && wa.isReady()) campaign.resume();
+  const body = req.body || {};
+  const n = campaign.retryFailed({ includeNotOnWhatsApp: body.includeNotOnWhatsApp === true });
+  // Only resume when the page asked for it (the user confirmed), never silently from a manual pause.
+  if (n && body.resume === true && wa.isReady()) campaign.resume();
   res.json({ requeued: n, campaign: campaign.snapshot({ items: false }) });
 }));
 app.post('/api/campaign/discard', wrap((req, res) => {
   if (!campaign) return res.json({ ok: true });
   if (campaign.state === 'running') throw fail(409, 'Pause or stop the campaign first');
+  if (campaign.counts().sending > 0) throw fail(409, 'A message is still being sent. Try again in a few seconds.');
   if (campaign.state !== 'done') campaign.stop();
   saveNow();
   campaign.removeAllListeners();
@@ -257,6 +320,7 @@ app.post('/api/campaign/discard', wrap((req, res) => {
 }));
 app.post('/api/campaign/test', wrap(async (req, res) => {
   if (!wa.isReady()) throw fail(400, 'Connect WhatsApp first');
+  if (campaign && (campaign.state === 'running' || campaign.counts().sending > 0)) throw fail(409, 'Pause the campaign before sending a test');
   const { template, contact } = req.body || {};
   const sample = contact || { firstName: 'Test', lastName: 'Contact', phone: wa.info && wa.info.number, extra: {} };
   const { text } = render(String(template || ''), sample);
@@ -272,10 +336,11 @@ app.get('/api/campaign/export.csv', wrap((req, res) => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n\r;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
+  const fixed = ['firstName', 'lastName', 'phone', 'status', 'error', 'sentAt'];
   const extraKeys = [];
   for (const it of campaign.items) for (const k of Object.keys(it.extra || {})) if (!extraKeys.includes(k)) extraKeys.push(k);
-  const head = ['firstName', 'lastName', 'phone', 'status', 'error', 'sentAt', ...extraKeys];
-  const lines = [head.join(',')];
+  const extraHead = extraKeys.map(k => (fixed.includes(k) ? `${k} (column)` : k));
+  const lines = [[...fixed, ...extraHead].join(',')];
   for (const it of campaign.items) {
     lines.push([
       it.firstName, it.lastName, it.e164 || it.phone, it.status, it.error || '',
@@ -298,6 +363,15 @@ app.use((err, req, res, next) => {
 });
 
 // ----- start -----
+server.on('error', err => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(`\n  Port ${config.port} is already in use. Is WhatsApp Broadcast already running in another window?`);
+    console.error(`  Close it, or start this one with a different port: PORT=3211 npm start\n`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(config.port, config.host, () => {
   const url = `http://${config.host}:${config.port}`;
   console.log('');
@@ -315,14 +389,17 @@ server.listen(config.port, config.host, () => {
   }
 });
 
-let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n${signal} received, shutting down…`);
-  try { if (campaign && campaign.state === 'running') campaign.pause('Application closed'); } catch { /* ignore */ }
+  cancelReconnect(true);
+  try {
+    if (campaign && campaign.state === 'running') campaign.pause('Application closed', { auto: false });
+    if (campaign) await campaign.settle(10000); // let a message that is going out finish, so it is recorded
+  } catch { /* ignore */ }
   saveNow();
-  try { await Promise.race([wa.destroy(), new Promise(r => setTimeout(r, 5000))]); } catch { /* ignore */ }
+  try { await Promise.race([wa.destroy(), sleep(8000)]); } catch { /* ignore */ }
   process.exit(0);
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
