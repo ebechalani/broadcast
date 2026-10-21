@@ -18,7 +18,13 @@ const DEFAULT_SETTINGS = Object.freeze({
   maxRetries: 1,              // retry a failed send this many times
   maxConsecutiveFailures: 3,  // pause the campaign after this many failures in a row
   maxConsecutiveSkips: 5,     // pause after this many "not on WhatsApp" answers in a row
+  keepAwake: true,            // keep the PC from sleeping while a campaign is running or scheduled (app-level)
 });
+
+// Timers longer than ~24.8 days overflow in Node and fire at once, and a PC that
+// sleeps delays them: wait in chunks and re-check the clock after each one.
+const MAX_TIMER_MS = 6 * 3600 * 1000;
+const MAX_SCHEDULE_DAYS = 30;
 
 const LIMITS = {
   minDelaySec: [3, 3600],
@@ -176,6 +182,8 @@ class Campaign extends EventEmitter {
     this.lastSentAt = o.lastSentAt || null;
     this.sentSinceBatchPause = Number(o.sentSinceBatchPause) || 0;
     this.batchPauseUntil = Number(o.batchPauseUntil) || null;
+    this.scheduledAt = Number(o.scheduledAt) || null;
+    this._scheduleLogged = false;
     this.consecutiveFailures = 0;
     this.consecutiveSkips = 0;
     this._waker = null;
@@ -295,6 +303,16 @@ class Campaign extends EventEmitter {
 
     const index = this.items.findIndex(i => i.status === 'pending');
     if (index < 0) { this._finish('done'); return; }
+
+    // Scheduled campaign: nothing goes out before the chosen time.
+    if (this.scheduledAt) {
+      const left = this.scheduledAt - this.now();
+      if (left > 0) { await this._wait(left, 'scheduled start'); return; }
+      if (!this._scheduleLogged) {
+        this._scheduleLogged = true;
+        this._log('info', 'Scheduled time reached, sending starts');
+      }
+    }
 
     if (!this.client || !this.client.isReady()) {
       this.pause('WhatsApp is not connected', { auto: true });
@@ -468,6 +486,8 @@ class Campaign extends EventEmitter {
   _wait(ms, label) {
     const duration = Number.isFinite(ms) ? Math.max(0, Math.round(ms)) : 0;
     return new Promise(resolve => {
+      // `until` is the real end shown to the user; the timer itself is capped and
+      // the loop simply re-checks the clock when it fires early.
       const until = this.now() + duration;
       this.waiting = { label, until, ms: duration };
       let timer = null;
@@ -479,9 +499,24 @@ class Campaign extends EventEmitter {
       };
       // Install the waker before anyone can react to the state event.
       this._waker = finish;
-      timer = setTimeout(finish, duration);
+      timer = setTimeout(finish, Math.min(duration, MAX_TIMER_MS));
       this._emitState();
     });
+  }
+
+  /** Cancel the schedule and start sending right away (still respecting all pacing rules). */
+  startNow() {
+    if (!this.scheduledAt || this.scheduledAt <= this.now()) return false;
+    this.scheduledAt = null;
+    this._log('info', 'Schedule cancelled: sending starts now');
+    this._emitState();
+    this._wake();
+    return true;
+  }
+
+  /** True while a scheduled campaign has not reached its start time yet. */
+  isWaitingForSchedule() {
+    return Boolean(this.scheduledAt && this.scheduledAt > this.now() && !TERMINAL.has(this.state));
   }
 
   _waitForWake() {
@@ -532,6 +567,7 @@ class Campaign extends EventEmitter {
       lastSentAt: this.lastSentAt,
       sentSinceBatchPause: this.sentSinceBatchPause,
       batchPauseUntil: this.batchPauseUntil,
+      scheduledAt: this.scheduledAt,
       estimatedRemainingMs: estimateDurationMs(this.counts().pending, this.settings),
     };
     if (withItems) {
@@ -546,6 +582,7 @@ class Campaign extends EventEmitter {
     delete snap.waiting;
     delete snap.estimatedRemainingMs;
     // A running campaign is saved as paused so it can be resumed after a restart.
+    snap.wasRunning = snap.state === 'running' || (snap.state === 'paused' && this.autoPaused);
     if (snap.state === 'running') { snap.state = 'paused'; snap.pauseReason = 'Interrupted'; }
     snap.items = this.items;
     snap.logs = this.logs.slice(-500);
@@ -573,6 +610,7 @@ class Campaign extends EventEmitter {
       lastSentAt: json.lastSentAt,
       sentSinceBatchPause: json.sentSinceBatchPause,
       batchPauseUntil: json.batchPauseUntil,
+      scheduledAt: json.scheduledAt,
       client: d.client,
       counter: d.counter,
       now: d.now,
@@ -582,6 +620,17 @@ class Campaign extends EventEmitter {
     } else if (items.some(i => i.status === 'pending')) {
       c.state = 'paused';
       c.pauseReason = json.pauseReason || 'Restored after restart';
+      const notStarted = items.every(i => i.status === 'pending');
+      if (c.scheduledAt && json.wasRunning && notStarted) {
+        if (c.scheduledAt > c.now()) {
+          // Still in the future: keep the appointment. It resumes by itself once WhatsApp is connected.
+          c.autoPaused = true;
+          c.pauseReason = 'Scheduled: waiting for WhatsApp to connect';
+        } else {
+          // The time passed while the app was closed: never fire late without asking.
+          c.pauseReason = `The scheduled time (${new Date(c.scheduledAt).toLocaleString()}) passed while the app was closed. Press Resume to send now, or Stop.`;
+        }
+      }
     } else {
       c.state = 'done';
     }
@@ -605,6 +654,8 @@ module.exports = {
   Campaign,
   DEFAULT_SETTINGS,
   LIMITS,
+  MAX_TIMER_MS,
+  MAX_SCHEDULE_DAYS,
   INTERRUPTED_MESSAGE,
   sanitizeSettings,
   estimateDurationMs,

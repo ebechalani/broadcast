@@ -253,6 +253,78 @@ test('retryFailed re-queues failed items and optionally skipped ones', async () 
   assert.equal(c.counts().pending, 2);
 });
 
+test('scheduled campaign sends nothing before the scheduled time, then sends', async () => {
+  const client = fakeClient();
+  const scheduledAt = Date.now() + 400;
+  const c = new Campaign({ template: 'x', contacts: contacts.slice(0, 2), settings: fast, client, scheduledAt });
+  const loop = c.start();
+  await waitFor(() => c.waiting && c.waiting.label === 'scheduled start');
+  assert.equal(c.waiting.until, scheduledAt);
+  assert.ok(c.isWaitingForSchedule());
+  await sleep(250);
+  assert.equal(client.sent.length, 0, 'nothing before the time');
+  await loop;
+  assert.equal(client.sent.length, 2);
+  assert.ok(client.sent[0].at >= scheduledAt - 5, 'first message at or after the scheduled time');
+  assert.ok(c.logs.some(l => /Scheduled time reached/.test(l.message)));
+});
+
+test('startNow cancels the schedule; pause/resume keeps it', async () => {
+  const client = fakeClient();
+  const c = new Campaign({ template: 'x', contacts: contacts.slice(0, 1), settings: fast, client, scheduledAt: Date.now() + 60000 });
+  const loop = c.start();
+  await waitFor(() => c.waiting && c.waiting.label === 'scheduled start');
+  c.pause('test');
+  c.resume();
+  await waitFor(() => c.waiting && c.waiting.label === 'scheduled start');
+  assert.equal(client.sent.length, 0, 'resume does not skip the schedule');
+  assert.equal(c.startNow(), true);
+  await loop;
+  assert.equal(c.scheduledAt, null);
+  assert.equal(client.sent.length, 1);
+});
+
+test('very long waits are chunked so the timer cannot overflow', async () => {
+  const client = fakeClient();
+  const far = Date.now() + 29 * 86400 * 1000;
+  const c = new Campaign({ template: 'x', contacts: contacts.slice(0, 1), settings: fast, client, scheduledAt: far });
+  const loop = c.start();
+  await waitFor(() => c.waiting && c.waiting.label === 'scheduled start');
+  assert.equal(c.waiting.until, far, 'the real time is shown');
+  await sleep(100);
+  assert.equal(client.sent.length, 0, 'a 29-day timer did not fire immediately');
+  c.stop();
+  await loop;
+});
+
+test('restore: a future schedule waits for WhatsApp by itself, a missed one asks first', () => {
+  const client = fakeClient();
+  const base = { id: 'x', template: 't', items: contacts.map(ct => ({ ...ct, status: 'pending', attempts: 0 })), state: 'paused', wasRunning: true };
+  const future = Campaign.fromJSON({ ...base, scheduledAt: Date.now() + 3600 * 1000 }, { client });
+  assert.equal(future.state, 'paused');
+  assert.equal(future.autoPaused, true);
+  assert.match(future.pauseReason, /Scheduled/);
+  const missed = Campaign.fromJSON({ ...base, scheduledAt: Date.now() - 3600 * 1000 }, { client });
+  assert.equal(missed.autoPaused, false);
+  assert.match(missed.pauseReason, /passed while the app was closed/);
+  const manual = Campaign.fromJSON({ ...base, wasRunning: false, scheduledAt: Date.now() + 3600 * 1000 }, { client });
+  assert.equal(manual.autoPaused, false, 'a campaign the user paused stays paused');
+});
+
+test('toJSON marks a scheduled campaign as running so it is restored', async () => {
+  const client = fakeClient();
+  const c = new Campaign({ template: 'x', contacts: contacts.slice(0, 1), settings: fast, client, scheduledAt: Date.now() + 60000 });
+  const loop = c.start();
+  await waitFor(() => c.waiting && c.waiting.label === 'scheduled start');
+  const json = JSON.parse(JSON.stringify(c.toJSON()));
+  assert.equal(json.wasRunning, true);
+  assert.equal(json.scheduledAt, c.scheduledAt);
+  c.pause('Application closed', { auto: true });
+  assert.equal(JSON.parse(JSON.stringify(c.toJSON())).wasRunning, true, 'auto-pause on shutdown keeps the appointment');
+  c.stop();
+  await loop;
+});
+
 test('sanitizeSettings clamps and fixes ordering', () => {
   const s = sanitizeSettings({ minDelaySec: '1', maxDelaySec: '0', batchSize: 'abc', dailyLimit: 99999, checkRegistered: 'false', quietStart: '25:00' });
   assert.equal(s.minDelaySec, 3);

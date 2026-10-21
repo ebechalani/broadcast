@@ -14,6 +14,8 @@ const { render, unknownPlaceholders } = require('./src/template');
 const { Campaign, DEFAULT_SETTINGS, sanitizeSettings, estimateDurationMs } = require('./src/campaign');
 const { JsonFile, DailyCounter, CampaignStore } = require('./src/store');
 const WhatsApp = require('./src/whatsapp');
+const KeepAwake = require('./src/keepawake');
+const { MAX_SCHEDULE_DAYS } = require('./src/campaign');
 
 fs.mkdirSync(config.dataDir, { recursive: true });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -116,14 +118,24 @@ function cancelReconnect(resetAttempts) {
   if (resetAttempts) reconnect.attempt = 0;
 }
 
+function campaignWaitingForWhatsApp() {
+  return Boolean(campaign && campaign.state === 'paused' && campaign.autoPaused);
+}
+
 function scheduleReconnect() {
   if (reconnect.timer || shuttingDown) return;
-  if (reconnect.attempt >= RECONNECT_DELAYS_SEC.length) {
+  let delay;
+  if (reconnect.attempt < RECONNECT_DELAYS_SEC.length) {
+    delay = RECONNECT_DELAYS_SEC[reconnect.attempt++];
+    log('info', `Will try to reconnect in ${delay} s (attempt ${reconnect.attempt} of ${RECONNECT_DELAYS_SEC.length})`);
+  } else if (campaignWaitingForWhatsApp()) {
+    // A campaign (possibly scheduled for later) is waiting: keep trying, slowly.
+    delay = 600;
+    log('info', 'A campaign is waiting for WhatsApp: will keep trying to reconnect every 10 minutes');
+  } else {
     log('warn', 'Gave up reconnecting automatically. Click Connect to try again.');
     return;
   }
-  const delay = RECONNECT_DELAYS_SEC[reconnect.attempt++];
-  log('info', `Will try to reconnect in ${delay} s (attempt ${reconnect.attempt} of ${RECONNECT_DELAYS_SEC.length})`);
   reconnect.timer = setTimeout(() => {
     reconnect.timer = null;
     if (wa.client || wa.manualDisconnect || shuttingDown) return;
@@ -175,20 +187,32 @@ function campaignEvent(snap) {
   return { ...snap, sentToday: counter.sentToday() };
 }
 
+// Keep the PC awake while a campaign is running, scheduled, or waiting for WhatsApp to come back.
+const keepAwake = new KeepAwake({ log: (level, message) => log(level, message) });
+function updateKeepAwake() {
+  const busy = Boolean(campaign && (campaign.state === 'running' || campaignWaitingForWhatsApp()));
+  keepAwake.set(busy && settings.keepAwake !== false && !shuttingDown);
+}
+
 function attachCampaign(c) {
   campaign = c;
-  c.on('state', snap => io.emit('campaign', campaignEvent(snap)));
+  c.on('state', snap => { io.emit('campaign', campaignEvent(snap)); updateKeepAwake(); });
   c.on('item', payload => io.emit('campaign:item', { ...payload, sentToday: counter.sentToday() }));
   c.on('log', entry => io.emit('log', { ...entry, source: 'campaign' }));
   c.on('change', scheduleSave);
   io.emit('campaign', campaignEvent(c.snapshot()));
+  updateKeepAwake();
 }
 
 const restored = campaigns.latestUnfinished();
 if (restored) {
   attachCampaign(Campaign.fromJSON(restored, { client: wa, counter }));
   const c = campaign.counts();
-  log('info', `Found an unfinished campaign "${campaign.name}" (${c.pending} left${c.failed ? `, ${c.failed} to review` : ''}). Resume it from the Send panel.`);
+  if (campaign.autoPaused && campaign.isWaitingForSchedule()) {
+    log('info', `Scheduled campaign "${campaign.name}" (${c.pending} message(s)) is set for ${new Date(campaign.scheduledAt).toLocaleString()}. It continues by itself once WhatsApp is connected.`);
+  } else {
+    log('info', `Found an unfinished campaign "${campaign.name}" (${c.pending} left${c.failed ? `, ${c.failed} to review` : ''}). Resume it from the Send panel.`);
+  }
 }
 
 /** Pause the campaign and wait for a message that is going out right now. */
@@ -216,6 +240,7 @@ app.put('/api/settings', wrap((req, res) => {
   settings = { ...clean, defaultCountry: /^[A-Z]{2}$/.test(country) ? country : settings.defaultCountry };
   settingsFile.write(settings);
   io.emit('settings', settings);
+  updateKeepAwake();
   res.json(settings);
 }));
 
@@ -272,14 +297,32 @@ app.post('/api/campaign/start', wrap((req, res) => {
   if (!template) throw fail(400, 'The message is empty');
   const contacts = (Array.isArray(body.contacts) ? body.contacts : []).filter(c => c && c.status === 'ok' && c.phone);
   if (!contacts.length) throw fail(400, 'No valid contacts to send to');
+  let scheduledAt = null;
+  if (body.scheduledAt !== undefined && body.scheduledAt !== null && body.scheduledAt !== '') {
+    scheduledAt = typeof body.scheduledAt === 'number' ? body.scheduledAt : Date.parse(body.scheduledAt);
+    if (!Number.isFinite(scheduledAt)) throw fail(400, 'The scheduled date is not valid');
+    const now = Date.now();
+    if (scheduledAt < now + 30 * 1000) throw fail(400, 'The scheduled time is in the past. Pick a later time, or choose "Send now".');
+    if (scheduledAt > now + MAX_SCHEDULE_DAYS * 86400 * 1000) throw fail(400, `A campaign can be scheduled at most ${MAX_SCHEDULE_DAYS} days ahead`);
+  }
   const campaignSettings = sanitizeSettings({ ...settings, ...(body.settings || {}) });
   if (campaign) campaign.removeAllListeners();
-  const c = new Campaign({ name: body.name, template, contacts, settings: campaignSettings, client: wa, counter });
+  const c = new Campaign({ name: body.name, template, contacts, settings: campaignSettings, client: wa, counter, scheduledAt });
   attachCampaign(c);
   saveNow();
   c.start().catch(err => log('error', `Campaign loop ended with error: ${err.message}`));
-  log('info', `Campaign "${c.name}" started with ${contacts.length} contact(s)`);
+  log('info', scheduledAt
+    ? `Campaign "${c.name}" scheduled for ${new Date(scheduledAt).toLocaleString()} with ${contacts.length} contact(s). Keep the app and the PC on.`
+    : `Campaign "${c.name}" started with ${contacts.length} contact(s)`);
   res.json(c.snapshot());
+}));
+
+app.post('/api/campaign/start-now', wrap((req, res) => {
+  if (!campaign) throw fail(404, 'No campaign');
+  if (!campaign.isWaitingForSchedule()) throw fail(409, 'This campaign is not waiting for a scheduled time');
+  campaign.startNow();
+  if (campaign.state === 'paused' && wa.isReady()) campaign.resume();
+  res.json(campaign.snapshot({ items: false }));
 }));
 
 app.post('/api/campaign/pause', wrap((req, res) => {
@@ -315,6 +358,7 @@ app.post('/api/campaign/discard', wrap((req, res) => {
   saveNow();
   campaign.removeAllListeners();
   campaign = null;
+  updateKeepAwake();
   io.emit('campaign', null);
   res.json({ ok: true });
 }));
@@ -396,7 +440,9 @@ async function shutdown(signal) {
   console.log(`\n${signal} received, shutting down…`);
   cancelReconnect(true);
   try {
-    if (campaign && campaign.state === 'running') campaign.pause('Application closed', { auto: false });
+    // Saved as "was running" so a scheduled campaign keeps its appointment after a restart.
+    if (campaign && campaign.state === 'running') campaign.pause('Application closed', { auto: true });
+    keepAwake.release();
     if (campaign) await campaign.settle(10000); // let a message that is going out finish, so it is recorded
   } catch { /* ignore */ }
   saveNow();

@@ -8,7 +8,7 @@ test('CSV with English headers and comma delimiter', () => {
   const text = 'First name,Last name,WhatsApp\nJean,Dupont,+961 70 123 456\nMarie,Curie,03 123 456\n';
   const r = parseContacts({ text }, { defaultCountry: 'LB' });
   assert.equal(r.hasHeader, true);
-  assert.deepEqual(r.mapping, { phone: 'WhatsApp', phonePrefix: null, firstName: 'First name', lastName: 'Last name', fullName: null, phoneFallbacks: [] });
+  assert.deepEqual(r.mapping, { phone: 'WhatsApp', countryCode: null, firstName: 'First name', lastName: 'Last name', fullName: null, phoneFallbacks: [] });
   assert.equal(r.contacts.length, 2);
   assert.equal(r.contacts[0].firstName, 'Jean');
   assert.equal(r.contacts[0].lastName, 'Dupont');
@@ -169,32 +169,92 @@ test('Excel date cells are rendered as dd/mm/yyyy', () => {
   assert.equal(r.contacts[0].phone, '96170123456');
 });
 
-test('teachers layout: Name, Whatsapp, Prefix (country code), Last Name, School', () => {
-  const text = 'Name,Whatsapp,Prefix,Last Name,School\nRita,70 123 456,961,Khoury,Lycée A\nPierre,6 12 34 56 78,+33,Martin,Lycée B\nSami,0096171234567,961,Haddad,Lycée A\nNour,96176123456,961,Saad,Lycée C\n';
+test('teachers layout: Name, Whatsapp, Prefix (title), Last Name, School, Country Code', () => {
+  const text = 'Name,Whatsapp,Prefix,Last Name,School,Country Code\n'
+    + 'Rita,70 123 456,Mrs,Khoury,Lycée A,961\n'
+    + 'Pierre,6 12 34 56 78,Mr,Martin,Lycée B,+33\n'
+    + 'Sami,0096171234567,Mr,Haddad,Lycée A,961\n'
+    + 'Nour,76 123 456,,Saad,Lycée C,\n';
   const r = parseContacts({ text }, { defaultCountry: 'LB' });
   assert.equal(r.mapping.firstName, 'Name');
   assert.equal(r.mapping.lastName, 'Last Name');
   assert.equal(r.mapping.phone, 'Whatsapp');
-  assert.equal(r.mapping.phonePrefix, 'Prefix');
-  assert.deepEqual(r.extraHeaders, ['School']);
+  assert.equal(r.mapping.countryCode, 'Country Code');
+  assert.deepEqual(r.extraHeaders, ['Prefix', 'School']);
   assert.deepEqual(r.contacts.map(c => c.status), ['ok', 'ok', 'ok', 'ok']);
   assert.equal(r.contacts[0].phone, '96170123456');
-  assert.equal(r.contacts[1].phone, '33612345678', 'prefix +33 applied to a French local number');
-  assert.equal(r.contacts[2].phone, '96171234567', 'number already international: prefix ignored');
-  assert.equal(r.contacts[3].phone, '96176123456', 'number with country code but no plus: still correct');
+  assert.equal(r.contacts[1].phone, '33612345678', 'country code +33 applied to a French local number');
+  assert.equal(r.contacts[2].phone, '96171234567', 'number already international: country code ignored');
+  assert.equal(r.contacts[3].phone, '96176123456', 'empty country code: default country used');
   assert.equal(r.contacts[0].firstName, 'Rita');
   assert.equal(r.contacts[0].lastName, 'Khoury');
+  assert.equal(r.contacts[0].extra.Prefix, 'Mrs');
   assert.equal(r.contacts[0].extra.School, 'Lycée A');
 });
 
-test('a "Prefix" column holding titles stays an ordinary placeholder column', () => {
-  const text = 'Name,Whatsapp,Prefix,Last Name,School\nRita,70 123 456,Mrs,Khoury,Lycée A\nPierre,+33 6 12 34 56 78,Mr,Martin,Lycée B\n';
+test('"Prefix" is never treated as a country code, even when it holds digits', () => {
+  const text = 'Name,Whatsapp,Prefix,Last Name,School\nRita,70 123 456,Mrs,Khoury,Lycée A\nPierre,+33 6 12 34 56 78,Mr,Martin,Lycée B\nAli,71 234 567,1,Hassan,Lycée C\n';
   const r = parseContacts({ text }, { defaultCountry: 'LB' });
-  assert.equal(r.mapping.phonePrefix, null);
+  assert.equal(r.mapping.countryCode, null);
   assert.deepEqual(r.extraHeaders, ['Prefix', 'School']);
   assert.equal(r.contacts[0].extra.Prefix, 'Mrs');
   assert.equal(r.contacts[0].phone, '96170123456');
   assert.equal(r.contacts[1].phone, '33612345678');
+  assert.equal(r.contacts[2].phone, '96171234567');
+});
+
+test('a number already written with its own code is not given the code twice', () => {
+  const text = 'Name,Whatsapp,Prefix,Last Name,School,Country Code\n'
+    + 'Amal,971501234567,Mrs,Ali,A,971\n'
+    + 'Hans,4915123456789,Mr,Meyer,B,49\n'
+    + 'Joost,31612345678,Mr,Jansen,C,31\n'
+    + 'Rita,96170123456,Mrs,Khoury,D,961\n'
+    + 'Pierre,06 12 34 56 78,Mr,Martin,E,33\n'
+    + "Paul,'0612345678,Mr,Durand,F,33\n";
+  const r = parseContacts({ text }, { defaultCountry: 'LB' });
+  assert.deepEqual(r.contacts.map(c => c.phone), ['971501234567', '4915123456789', '31612345678', '96170123456', '33612345678', '33612345678']);
+  assert.equal(r.contacts[5].status, 'duplicate', 'same number as Pierre once the apostrophe is ignored');
+});
+
+test('country codes written in other ways, and generic "Country" / "Code" headers', () => {
+  const r1 = parseContacts({ text: 'Name,Whatsapp,Last Name,Country Code\nPierre,06 12 34 56 78,Martin,+33 (France)\nRita,70 123 456,Khoury,961 (Liban)\nJean,06 11 22 33 44,Dupont,33.0\n' }, { defaultCountry: 'LB' });
+  assert.equal(r1.mapping.countryCode, 'Country Code');
+  assert.deepEqual(r1.contacts.map(c => c.phone), ['33612345678', '96170123456', '33611223344']);
+  const r2 = parseContacts({ text: 'Name,Whatsapp,Last Name,Country\nPierre,06 12 34 56 78,Martin,33\nRita,70 123 456,Khoury,961\n' }, { defaultCountry: 'LB' });
+  assert.equal(r2.mapping.countryCode, 'Country');
+  assert.equal(r2.contacts[0].phone, '33612345678');
+  const r3 = parseContacts({ text: 'Name,Whatsapp,Last Name,Country Code\nPierre,06 12 34 56 78,Martin,+33\nRita,70 123 456,Khoury,LB\nSami,71 234 567,Haddad,Liban\n' }, { defaultCountry: 'LB' });
+  assert.equal(r3.mapping.countryCode, 'Country Code', 'a clearly named column is used even if only some cells hold a code');
+  assert.deepEqual(r3.contacts.map(c => c.phone), ['33612345678', '96170123456', '96171234567']);
+  const r4 = parseContacts({ text: 'Name,Whatsapp,Last Name,Code\nRita,70 123 456,Khoury,9999\nSami,71 234 567,Haddad,7777\n' }, { defaultCountry: 'LB' });
+  assert.equal(r4.mapping.countryCode, null, 'codes that are not real calling codes are ignored');
+});
+
+test('the Prefix column cannot be chosen as the country code, even by hand', () => {
+  const text = 'Name,Whatsapp,Prefix,Last Name,School,Country Code\nPierre,06 12 34 56 78,Mr,Martin,S,33\n';
+  const r = parseContacts({ text }, { defaultCountry: 'LB', mapping: { countryCode: 'Prefix' } });
+  assert.equal(r.mapping.countryCode, 'Country Code');
+  assert.equal(r.contacts[0].phone, '33612345678');
+  assert.equal(r.contacts[0].extra.Prefix, 'Mr');
+});
+
+test('pasted teacher rows without a header: the Mr/Mrs column is not taken as the last name', () => {
+  const r = parseContacts({ text: 'Rita,70 123 456,Mrs,Khoury,Lycée A\nSami,71 234 567,Mr,Haddad,Lycée B\n' }, { defaultCountry: 'LB' });
+  assert.equal(r.hasHeader, false);
+  assert.equal(r.contacts[0].firstName, 'Rita');
+  assert.equal(r.contacts[0].lastName, 'Khoury');
+  assert.equal(r.contacts[1].lastName, 'Haddad');
+});
+
+test('a foreign local number without its code is invalid, not read as another country', () => {
+  const r = parseContacts({ text: 'Name,Whatsapp,Prefix,Last Name\nPierre,612345678,33,Martin\n' }, { defaultCountry: 'LB' });
+  assert.equal(r.contacts[0].status, 'invalid');
+});
+
+test('a "Country Code" column holding country names is not used as a dialing code', () => {
+  const r = parseContacts({ text: 'Name,Whatsapp,Last Name,Country Code\nRita,70 123 456,Khoury,Lebanon\n' }, { defaultCountry: 'LB' });
+  assert.equal(r.mapping.countryCode, null);
+  assert.equal(r.contacts[0].phone, '96170123456');
 });
 
 test('truncated "Whatsap" header is still recognised as the phone column', () => {

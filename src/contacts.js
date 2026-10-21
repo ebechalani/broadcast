@@ -1,7 +1,11 @@
 'use strict';
 const Papa = require('papaparse');
 const XLSX = require('xlsx');
+const { getCountries, getCountryCallingCode } = require('libphonenumber-js/max');
 const { normalizePhone, looksLikePhone, toRawString } = require('./phone');
+
+// Every real country calling code (961, 33, 1, ...): anything else is not a country code.
+const CALLING_CODES = new Set(getCountries().map(c => String(getCountryCallingCode(c))));
 const { normKey } = require('./template');
 
 const FIRST_NAMES = ['firstname', 'first', 'prenom', 'prenoms', 'givenname', 'forename', 'firstnames', 'prenomeleve', 'prenomparent'];
@@ -11,9 +15,16 @@ const PHONES = ['phone', 'phonenumber', 'telephone', 'tel', 'numero', 'numerodet
 
 // "(^|[^a])tel" keeps "Atelier" out while matching "Tel", "Téléphone", "Tél. parent". "whatsap" also catches truncated/typo headers.
 const PHONE_FUZZY = /(whatsap|phone|mobile|numero|gsm|portable|cell|(^|[^a])tel)/;
-// A separate column holding the country calling code: "Prefix", "Indicatif", "Country code", "Code pays".
-const PREFIX_NAMES = ['prefix', 'prefixe', 'prefixes', 'indicatif', 'indicatifpays', 'countrycode', 'codepays', 'dialcode', 'dialingcode', 'countryprefix', 'phoneprefix', 'ind'];
-const PREFIX_FUZZY = /(prefix|indicatif|countrycode|codepays|dialcode)/;
+// An optional column holding the country calling code: "Country Code", "Code pays", "Indicatif".
+// "Prefix" on its own is NOT one of them: in these lists it holds the title (Mr, Mrs).
+const COUNTRY_CODE_NAMES = ['countrycode', 'countrycodes', 'codepays', 'codedupays', 'indicatif', 'indicatifpays', 'dialcode', 'dialingcode', 'callingcode', 'countrycallingcode', 'countryprefix', 'phoneprefix', 'phonecountrycode', 'phonecode', 'telcode', 'prefixepays', 'prefixpays'];
+const COUNTRY_CODE_FUZZY = /(countrycode|codepays|codedupays|indicatif|dialcode|dialingcode|callingcode|countryprefix|phoneprefix|phonecode|telcode|prefixepays|prefixpays)/;
+// Generic headers that are only taken as the country code when most cells hold one.
+const GENERIC_CODE_NAMES = ['country', 'cc', 'code', 'pays'];
+// Headers of a title column (Mr, Mrs): never a country code.
+const TITLE_HEADER_KEYS = ['prefix', 'prefixe', 'prefixes', 'title', 'titre', 'civilite', 'civility', 'salutation'];
+// Cell values of a title column.
+const TITLE_VALUE = /^(mr|mrs|ms|miss|mme|mlle|m|dr|pr|prof|madame|monsieur|mademoiselle|sir|madam|docteur|doctor|me)\.?$/i;
 const DIAL_CODE = /^(\+|00)?\d{1,4}$/;
 const FIRST_FUZZY = /(prenom|first|given)/;
 const LAST_FUZZY = /(surname|lastname|^last|^famille$|nomdefamille|familyname)/;
@@ -159,9 +170,25 @@ function guessPhoneColumn(headers, rows) {
 
 /** "+961", "00961", "961" -> "961"; anything else (e.g. "Mr") -> null. */
 function dialCodeDigits(value) {
-  const s = toRawString(value).replace(/[\s ().-]/g, '');
+  let s = toRawString(value).replace(/\p{Cf}/gu, '').trim();
+  s = s.replace(/\.0+$/, '');                              // "33.0" from a float export
+  s = s.replace(/[\s(]*\p{L}[\p{L}\s.'()-]*$/u, '');       // "+33 (France)", "961 Liban"
+  s = s.replace(/[\s\u00A0().-]/g, '');
   if (!DIAL_CODE.test(s)) return null;
-  return s.replace(/^(\+|00)/, '').replace(/^0+/, '') || null;
+  const d = s.replace(/^(\+|00)/, '').replace(/^0+/, '');
+  if (!d) return null;
+  // Real calling codes only; 1xxx covers the North American area-code style (1876 Jamaica).
+  return CALLING_CODES.has(d) || /^1\d{3}$/.test(d) ? d : null;
+}
+
+function titleScore(rows, col) {
+  let hits = 0, total = 0;
+  for (const r of rows) {
+    if (isBlank(r[col])) continue;
+    total++;
+    if (TITLE_VALUE.test(String(r[col]).trim())) hits++;
+  }
+  return total ? hits / total : 0;
 }
 
 function dialCodeScore(rows, col) {
@@ -237,6 +264,7 @@ function detectMapping(headers, rows, hasHeader) {
     // Positional fallback: the non-phone, mostly-text columns in order.
     const textCols = headers.filter(h => h !== phone && h !== fullName && h !== firstName && h !== lastName)
       .filter(h => phoneScore(rows, headers.indexOf(h)) < 0.5)
+      .filter(h => titleScore(rows, headers.indexOf(h)) < 0.5) // a Mr/Mrs column is not a name
       .filter(h => rows.some(r => !isBlank(r[headers.indexOf(h)]) && /[A-Za-zÀ-ɏ؀-ۿ]/.test(r[headers.indexOf(h)])));
     if (!firstName && !lastName && !fullName) {
       if (textCols.length >= 2) { firstName = textCols[0]; lastName = textCols[1]; }
@@ -244,18 +272,22 @@ function detectMapping(headers, rows, hasHeader) {
     }
   }
 
-  // Country-code column: named like one AND holding dialing codes (a "Prefix"
-  // column with Mr/Mrs stays an ordinary column usable as {{Prefix}}).
-  let phonePrefix = null;
+  // Country-code column: named like one AND holding dialing codes. Other
+  // columns (Prefix with Mr/Mrs, School, ...) stay usable as placeholders.
+  let countryCode = null;
   if (hasHeader) {
-    const cand = norm.find(h => h.raw !== phone && (PREFIX_NAMES.includes(h.key) || PREFIX_FUZZY.test(h.key)) && dialCodeScore(rows, h.i) >= 0.5);
-    phonePrefix = cand ? cand.raw : null;
+    const eligible = h => h.raw !== phone && !TITLE_HEADER_KEYS.includes(h.key);
+    // A clearly named column is used as soon as some cells hold a code (the rest keep the default country);
+    // a generic one ("Country", "Code") only when most of its cells are codes.
+    const cand = norm.find(h => eligible(h) && (COUNTRY_CODE_NAMES.includes(h.key) || COUNTRY_CODE_FUZZY.test(h.key)) && dialCodeScore(rows, h.i) > 0)
+      || norm.find(h => eligible(h) && GENERIC_CODE_NAMES.includes(h.key) && dialCodeScore(rows, h.i) >= 0.5);
+    countryCode = cand ? cand.raw : null;
   }
 
   // A column may only play one role.
-  const picked = { phone, phonePrefix, firstName, lastName, fullName };
+  const picked = { phone, countryCode, firstName, lastName, fullName };
   const used = new Set();
-  for (const role of ['phone', 'phonePrefix', 'firstName', 'lastName', 'fullName']) {
+  for (const role of ['phone', 'countryCode', 'firstName', 'lastName', 'fullName']) {
     if (picked[role] && used.has(picked[role])) picked[role] = null;
     if (picked[role]) used.add(picked[role]);
   }
@@ -297,8 +329,8 @@ function titleCaseIfShouting(s) {
   return str;
 }
 
-const EMPTY_MAPPING = { firstName: null, lastName: null, fullName: null, phone: null, phonePrefix: null, phoneFallbacks: [] };
-const ROLES = ['firstName', 'lastName', 'fullName', 'phone', 'phonePrefix'];
+const EMPTY_MAPPING = { firstName: null, lastName: null, fullName: null, phone: null, countryCode: null, phoneFallbacks: [] };
+const ROLES = ['firstName', 'lastName', 'fullName', 'phone', 'countryCode'];
 
 /**
  * Parse an upload into contacts.
@@ -346,15 +378,21 @@ function parseContacts(input, options = {}) {
       if (!(role in options.mapping)) continue;
       const v = options.mapping[role];
       // null clears the role; a name that no longer exists (header toggled) keeps the detection.
-      if (v === null || v === '') mapping[role] = null;
-      else if (headers.includes(v)) mapping[role] = v;
+      if (v === null || v === '') { mapping[role] = null; continue; }
+      if (!headers.includes(v)) continue;
+      if (role === 'countryCode') {
+        // The title column (Mr, Mrs) or a column without any code cannot be the country code.
+        const ci = headers.indexOf(v);
+        if (TITLE_HEADER_KEYS.includes(normKey(v)) || !rows.some(r => dialCodeDigits(r[ci]))) continue;
+      }
+      mapping[role] = v;
     }
     const chosen = new Set(ROLES.map(r => mapping[r]).filter(Boolean));
     mapping.phoneFallbacks = (mapping.phoneFallbacks || []).filter(h => !chosen.has(h));
   }
 
   const col = name => (name ? headers.indexOf(name) : -1);
-  const idx = { firstName: col(mapping.firstName), lastName: col(mapping.lastName), fullName: col(mapping.fullName), phone: col(mapping.phone), phonePrefix: col(mapping.phonePrefix) };
+  const idx = { firstName: col(mapping.firstName), lastName: col(mapping.lastName), fullName: col(mapping.fullName), phone: col(mapping.phone), countryCode: col(mapping.countryCode) };
   const fallbackIdx = (mapping.phoneFallbacks || []).map(col).filter(i => i >= 0);
   const roleCols = new Set(Object.values(idx).filter(i => i >= 0));
   const extraHeaders = headers.filter((h, i) => !roleCols.has(i));
@@ -377,12 +415,18 @@ function parseContacts(input, options = {}) {
     headers.forEach((h, c) => { if (!roleCols.has(c)) extra[h] = row[c] === undefined ? '' : String(row[c]).trim(); });
 
     // Main phone column first, then any other column that holds numbers.
-    // A country-code column ("Prefix": 961) is put in front of numbers written without one.
-    const prefixDigits = idx.phonePrefix >= 0 ? dialCodeDigits(row[idx.phonePrefix]) : null;
+    // A country-code column ("Country Code": 961) is put in front of numbers written without one.
+    const codeDigits = idx.countryCode >= 0 ? dialCodeDigits(row[idx.countryCode]) : null;
     const withPrefix = raw => {
-      const s = toRawString(raw).trim();
-      if (!prefixDigits || /^(\+|00)/.test(s)) return null;
-      return `+${prefixDigits}${s}`;
+      const s = toRawString(raw).replace(/\p{Cf}/gu, '').trim().replace(/^[‘’'"`]+/, '');
+      if (!codeDigits || /^(\+|00)/.test(s)) return null;
+      // Already written with its own code but no "+" (971501234567 with code 971): do not add it twice.
+      const digits = s.replace(/\D/g, '');
+      if (digits.startsWith(codeDigits)) {
+        const asIs = normalizePhone(`+${digits}`, defaultCountry);
+        if (asIs.ok && asIs.valid) return null;
+      }
+      return `+${codeDigits}${s}`;
     };
     const candidates = [idx.phone, ...fallbackIdx].filter(c => c >= 0);
     let phone = null, firstAttempt = null, usedCol = -1, rawPhone = '';
@@ -391,7 +435,11 @@ function parseContacts(input, options = {}) {
       if (isBlank(raw)) continue;
       const prefixed = withPrefix(raw);
       let r = prefixed ? normalizePhone(prefixed, defaultCountry) : null;
-      if (!r || !r.ok) r = normalizePhone(raw, defaultCountry);
+      if (!r || !r.ok || !r.valid) {
+        // The code did not give a valid number: use the number as written if that one is valid.
+        const plain = normalizePhone(raw, defaultCountry);
+        if (!r || !r.ok || (plain.ok && plain.valid)) r = plain;
+      }
       if (!firstAttempt) { firstAttempt = r; rawPhone = toRawString(raw); }
       if (r.ok) { phone = r; usedCol = c; rawPhone = toRawString(raw); break; }
     }

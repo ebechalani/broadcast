@@ -6,6 +6,7 @@ Send a personalized WhatsApp message to everyone on a list, from **your own What
 - Import contacts from a **CSV or Excel** file, or paste rows straight from a spreadsheet. French and English column names (`Prénom / Nom / Téléphone`, `First name / Last name / Phone`) are detected automatically; any extra column becomes a placeholder.
 - Write one message with placeholders such as `{{firstName}}`, `{{lastName}}` or `{{Classe}}`, preview it per contact, and send a test to yourself.
 - Pacing built in: random delay between messages, pause after every batch, daily cap across all campaigns, optional quiet hours, "typing…" indicator, and a check that each number is actually on WhatsApp before sending.
+- Send now or **schedule** a campaign for a date and time up to 30 days ahead. The schedule survives an app restart, and the PC is kept awake while a campaign is running or scheduled.
 - Pause, resume, stop, retry failures, export the results as CSV. An interrupted campaign (power cut, closed window) is offered for resume on the next start.
 
 Everything runs locally on your computer. Nothing is sent to any server other than WhatsApp itself.
@@ -41,7 +42,7 @@ Then open <http://127.0.0.1:3210> if it does not open by itself.
 3. **Message.** Type your text. Click a placeholder chip to insert it. The preview shows the message for a real contact. *Send a test to myself* delivers it to your own number so you can see it on your phone.
 4. **Send.** Review the pacing settings, click *Start sending*, and keep the window open. You can pause or stop at any time; the progress table shows what happened to each contact. *Retry failed* puts failed contacts back in the queue (and, if you choose, the ones reported as not on WhatsApp); press *Resume* to send them.
 
-Sample files are in `samples/` (also downloadable from the app): `teachers-sample.csv` (Name, Whatsapp, Prefix, Last Name, School) and `contacts-sample.csv` (Prénom, Nom, Téléphone, Classe).
+Sample files are in `samples/` (also downloadable from the app): `teachers-sample.csv` (Name, Whatsapp, Prefix, Last Name, School, Country Code) and `contacts-sample.csv` (Prénom, Nom, Téléphone, Classe).
 
 ### Contact file format
 
@@ -63,12 +64,12 @@ Jean	Dupont	70 123 456        (pasted from Excel, no header row)
 ```
 
 ```csv
-Name,Whatsapp,Prefix,Last Name,School
-Rita,70 123 456,961,Khoury,Lycée A
-Pierre,6 12 34 56 78,+33,Martin,Lycée B
+Name,Whatsapp,Prefix,Last Name,School,Country Code
+Rita,70 123 456,Mrs,Khoury,Lycée A,
+Pierre,6 12 34 56 78,Mr,Martin,Lycée B,33
 ```
 
-Numbers may be written with spaces, dashes, dots, parentheses, `+` or `00`, with Arabic digits, or two numbers in one cell (the first valid one is used). A separate country-code column (`Prefix`, `Indicatif`, `Country code`) is applied to numbers written without one; a "Prefix" column that holds titles (Mr, Mrs) is left alone and becomes a placeholder. Numbers without a country code use the default country selected in the app. Numbers with a different country code (`+33 6…`) are kept as they are. A single "Nom" or "Nom et Prénom" column containing `DUPONT Jean` is split into first and last name. Title rows above the real header are skipped. When a file has several phone columns (for example *Mobile Père* and *Mobile Mère*), the first one is used and the others fill in when it is empty; the contacts table says which column a number came from. Row numbers in the table refer to the rows of your file.
+Numbers may be written with spaces, dashes, dots, parentheses, `+` or `00`, with Arabic digits, or two numbers in one cell (the first valid one is used). `Prefix` is the title (Mr, Mrs) and is used as `{{Prefix}}`. An optional `Country Code` column (also `Code pays`, `Indicatif`) is applied to numbers written without one; leave it empty, or leave the column out, for numbers of the default country. Numbers without a country code use the default country selected in the app. Numbers with a different country code (`+33 6…`) are kept as they are. A single "Nom" or "Nom et Prénom" column containing `DUPONT Jean` is split into first and last name. Title rows above the real header are skipped. When a file has several phone columns (for example *Mobile Père* and *Mobile Mère*), the first one is used and the others fill in when it is empty; the contacts table says which column a number came from. Row numbers in the table refer to the rows of your file.
 
 ### Placeholders
 
@@ -78,10 +79,11 @@ Numbers may be written with spaces, dashes, dots, parentheses, `+` or `00`, with
 | `{{lastName}}` (also `{{nom}}`, `{{surname}}`) | Last name |
 | `{{fullName}}` | First and last name |
 | `{{phone}}` | The number in international format |
-| `{{Any column}}` | Any other column of your file, e.g. `{{Classe}}` |
-| `{{firstName|there}}` | Fallback text when the value is empty |
+| `{{Prefix}}` (also `{{title}}`, `{{civilité}}`) | The title column (Mr, Mrs…) |
+| `{{Any column}}` | Any other column of your file, e.g. `{{School}}`, `{{Classe}}` |
+| `{{Prefix|colleague}}` | Fallback text when the value is empty |
 
-Placeholder names are case- and accent-insensitive.
+Placeholder names are case- and accent-insensitive. When a placeholder is empty for a contact and has no fallback, the space next to it is removed, so `Dear {{Prefix}} {{lastName}},` gives `Dear Saad,` rather than `Dear  Saad,`.
 
 ## Staying safe (please read)
 
@@ -105,6 +107,9 @@ The defaults are deliberately conservative for a personal number:
 | Number check | on | Skips numbers that are not on WhatsApp |
 | Typing indicator | on | Shows "typing…" for a few seconds before each message |
 | Failure brakes | 3 failures in a row, or 5 "not on WhatsApp" in a row | The campaign pauses itself so a broken session cannot burn through the list |
+| Keep PC awake | on | Prevents sleep (not the screen turning off) while a campaign is running or scheduled; nothing is changed in Windows settings |
+
+**Scheduling.** Choose *Schedule for* under the settings to start a campaign at a given date and time instead of now. The app, the PC and the phone must be on at that time. If the app restarts before the time, the campaign keeps its appointment and continues once WhatsApp has reconnected; if the time passed while the app was closed, nothing is sent until you press *Resume*. *Send now* cancels the wait.
 
 With these defaults 100 messages take roughly 1 h 30. That is the point.
 
@@ -161,7 +166,7 @@ The automated Chrome window is **visible by default** (a separate window titled 
 - **The QR code never appears / "Could not start"** – the bundled Chromium failed to launch. Install Google Chrome and set `CHROME_PATH`, or run `npx puppeteer browsers install chrome` in the project folder.
 - **Stuck on "Loading WhatsApp…"** – wait a minute; big accounts take time to sync. If it stays stuck, click *Disconnect* then *Connect*.
 - **A QR code appears although you had already linked** – the phone removed this device (Linked devices → Log out) or the session expired. Scan again; the campaign resumes afterwards.
-- **"Reconnecting…" keeps failing** – check that the phone is online and WhatsApp is open on it at least once; after five attempts the app stops retrying and waits for you to click *Connect*.
+- **"Reconnecting…" keeps failing** – check that the phone is online and WhatsApp is open on it at least once; after five attempts the app stops retrying and waits for you to click *Connect*, unless a campaign is waiting for WhatsApp, in which case it keeps trying every 10 minutes.
 - **Messages fail with "Evaluation failed" or similar** – WhatsApp Web changed and the `whatsapp-web.js` library needs an update: run `npm update whatsapp-web.js` and restart.
 - **Numbers show as invalid** – check the default country, or write them with the country code (`+961 70 123 456`).
 

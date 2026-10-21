@@ -61,7 +61,9 @@ function parseOne(s, defaultCountry) {
     const pn = tryParse(candidate, defaultCountry);
     if (!pn) continue;
     if (pn.isValid()) { best = pn; break; }
-    if (!best && pn.isPossible()) best = pn;
+    // A merely "possible" number is only kept when read as written: the "+" retry must be valid,
+    // otherwise a foreign local number (612345678) would pass as an Australian one.
+    if (!best && pn.isPossible() && candidate === s) best = pn;
   }
   return best;
 }

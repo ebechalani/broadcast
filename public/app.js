@@ -20,7 +20,7 @@
     settingsTimer: null,
   };
 
-  const MAP_ROLES = ['firstName', 'lastName', 'fullName', 'phone', 'phonePrefix'];
+  const MAP_ROLES = ['firstName', 'lastName', 'fullName', 'phone', 'countryCode'];
 
   const STATUS_LABEL = {
     ok: 'Ready', invalid: 'Invalid', duplicate: 'Duplicate',
@@ -219,7 +219,7 @@
       `<span class="badge badge-green">${stats.ok} ready</span>`,
       stats.invalid ? `<span class="badge badge-red">${stats.invalid} invalid</span>` : '',
       stats.duplicate ? `<span class="badge badge-amber">${stats.duplicate} duplicate</span>` : '',
-      `<span class="muted small">${stats.total} row(s) read${S.source && S.source.file ? ` from ${esc(S.source.file.name)}` : ''}${S.parse.headerRow > 1 ? ` · header found on row ${S.parse.headerRow}` : ''}${S.parse.extraHeaders && S.parse.extraHeaders.length ? ` · extra columns: ${S.parse.extraHeaders.map(esc).join(', ')}` : ''}${S.parse.mapping && S.parse.mapping.phonePrefix ? ` · country code from: ${esc(S.parse.mapping.phonePrefix)}` : ''}${S.parse.mapping && S.parse.mapping.phoneFallbacks && S.parse.mapping.phoneFallbacks.length ? ` · also using numbers from: ${S.parse.mapping.phoneFallbacks.map(esc).join(', ')}` : ''}</span>`,
+      `<span class="muted small">${stats.total} row(s) read${S.source && S.source.file ? ` from ${esc(S.source.file.name)}` : ''}${S.parse.headerRow > 1 ? ` · header found on row ${S.parse.headerRow}` : ''}${S.parse.extraHeaders && S.parse.extraHeaders.length ? ` · extra columns: ${S.parse.extraHeaders.map(esc).join(', ')}` : ''}${S.parse.mapping && S.parse.mapping.countryCode ? ` · country code from: ${esc(S.parse.mapping.countryCode)}` : ''}${S.parse.mapping && S.parse.mapping.phoneFallbacks && S.parse.mapping.phoneFallbacks.length ? ` · also using numbers from: ${S.parse.mapping.phoneFallbacks.map(esc).join(', ')}` : ''}</span>`,
     ].join(' ');
     wrap.hidden = false;
     const MAX = 400;
@@ -287,8 +287,11 @@
       out.textContent = r.text;
       out.classList.remove('muted');
       const problems = [];
-      if (r.unknown.length) problems.push(`Unknown placeholder(s): ${r.unknown.map(u => `{{${u}}}`).join(', ')} — they will be left empty.`);
-      else if (r.missing.length) problems.push(`Empty for this contact: ${r.missing.map(u => `{{${u}}}`).join(', ')}.`);
+      const unknownKeys = new Set(r.unknown.map(u => u.toLowerCase()));
+      const missing = r.missing.filter(m => !unknownKeys.has(m.toLowerCase()));
+      if (r.unknown.length) problems.push(`Unknown placeholder(s): ${r.unknown.map(u => `{{${u}}}`).join(', ')} — not a column of your file, so it will be left empty.`);
+      if (missing.length) problems.push(`Empty for this contact: ${missing.map(u => `{{${u}}}`).join(', ')}.`);
+      if (r.leftover) problems.push('The message still contains "{{" or "}}": check that every placeholder is written like {{Name}}.');
       warn.hidden = !problems.length;
       warn.textContent = problems.join(' ');
     } catch (e) {
@@ -311,7 +314,7 @@
   });
 
   // ---------- Settings ----------
-  const SETTING_IDS = ['minDelaySec', 'maxDelaySec', 'batchSize', 'dailyLimit', 'maxRetries', 'maxConsecutiveFailures', 'maxConsecutiveSkips', 'checkRegistered', 'simulateTyping', 'quietHoursEnabled', 'quietStart', 'quietEnd'];
+  const SETTING_IDS = ['minDelaySec', 'maxDelaySec', 'batchSize', 'dailyLimit', 'maxRetries', 'maxConsecutiveFailures', 'maxConsecutiveSkips', 'checkRegistered', 'simulateTyping', 'quietHoursEnabled', 'quietStart', 'quietEnd', 'keepAwake'];
 
   function settingsToForm() {
     const s = S.settings;
@@ -396,19 +399,69 @@
     return (n - 1) * avg + n * typing + batch * Number(s.batchPauseSec) * 1000;
   }
 
+  // ---------- Schedule ----------
+  const MAX_SCHEDULE_DAYS = 30;
+  const pad2 = n => String(n).padStart(2, '0');
+  const toLocalInput = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const fmtWhen = ts => new Date(ts).toLocaleString([], { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  const scheduleChosen = () => $('when-later').checked;
+  // "2026-10-22T08:30" without an offset is read as local time.
+  const scheduledTs = () => ($('schedule-at').value ? new Date($('schedule-at').value).getTime() : NaN);
+
+  function initSchedule() {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(8, 30, 0, 0);
+    $('schedule-at').value = toLocalInput(d);
+    const refresh = () => {
+      $('schedule-at').disabled = !scheduleChosen();
+      $('schedule-at').min = toLocalInput(new Date());
+      $('btn-start').textContent = scheduleChosen() ? 'Schedule sending' : 'Start sending';
+      updateEstimate();
+    };
+    ['when-now', 'when-later'].forEach(id => $(id).addEventListener('change', refresh));
+    $('schedule-at').addEventListener('input', updateEstimate);
+    $('schedule-at').addEventListener('change', updateEstimate);
+    refresh();
+  }
+
+  /** Error text for the chosen time, or '' when it is fine. */
+  function scheduleProblem(ts) {
+    if (!Number.isFinite(ts)) return 'Pick the date and time to send.';
+    if (ts < Date.now() + 60 * 1000) return 'The scheduled time must be at least one minute from now.';
+    if (ts > Date.now() + MAX_SCHEDULE_DAYS * 86400 * 1000) return `A campaign can be scheduled at most ${MAX_SCHEDULE_DAYS} days ahead.`;
+    return '';
+  }
+
   function updateEstimate() {
     const el = $('estimate');
     const n = okContacts().length;
     const s = formToSettings();
     if (!n) { el.textContent = 'Load contacts to see how long the campaign will take.'; return; }
+    const resumeAt = s.quietEnd || '08:00';
+    if (scheduleChosen()) {
+      const ts = scheduledTs();
+      const problem = scheduleProblem(ts);
+      if (problem) { el.textContent = `${n} message(s) to send. ${problem}`; return; }
+      const sameDay = new Date(ts).toDateString() === new Date().toDateString();
+      const firstDay = Math.min(n, Math.max(0, Number(s.dailyLimit) - (sameDay ? S.sentToday : 0)));
+      if (!firstDay) {
+        el.textContent = `${n} message(s) scheduled for ${fmtWhen(ts)}. Today's limit (${s.dailyLimit}) is already reached, so sending starts the next morning at ${resumeAt}.`;
+        return;
+      }
+      let text = `${n} message(s) · starts ${fmtWhen(ts)} · takes about ${fmtDuration(estimateMs(firstDay, s))}`;
+      if (firstDay < n) text += ` for the first ${firstDay}; the remaining ${n - firstDay} go out the next day(s) from ${resumeAt} because of the daily limit (${s.dailyLimit}/day).`;
+      el.textContent = text;
+      return;
+    }
     const left = Math.max(0, Number(s.dailyLimit) - S.sentToday);
     const today = Math.min(n, left);
     if (!today) {
-      el.textContent = `${n} message(s) to send. Today's limit (${s.dailyLimit}) is already reached: sending starts tomorrow morning at ${s.quietEnd || '08:00'}.`;
+      el.textContent = `${n} message(s) to send. Today's limit (${s.dailyLimit}) is already reached: sending starts tomorrow morning at ${resumeAt}.`;
       return;
     }
     let text = `${n} message(s) to send · estimated ${fmtDuration(estimateMs(today, s))}`;
-    if (today < n) text += ` for the first ${today} today; the remaining ${n - today} go out from tomorrow ${s.quietEnd || '08:00'} because of the daily limit (${s.dailyLimit}/day, ${S.sentToday} already sent).`;
+    if (today < n) text += ` for the first ${today} today; the remaining ${n - today} go out from tomorrow ${resumeAt} because of the daily limit (${s.dailyLimit}/day, ${S.sentToday} already sent).`;
     el.textContent = text;
   }
 
@@ -431,16 +484,33 @@
     if (!template) { toast('Write the message first (step 3)', true); return; }
     const s = formToSettings();
     if (Number(s.maxDelaySec) < Number(s.minDelaySec)) { toast('Fix the delays: the maximum must be at least the minimum', true); return; }
-    const est = fmtDuration(estimateMs(Math.min(contacts.length, Math.max(0, Number(s.dailyLimit) - S.sentToday)), s));
-    const ok = confirm(`Send ${contacts.length} personalized message(s) from +${S.wa.info ? S.wa.info.number : '?'}?\n\nDelay ${s.minDelaySec}–${s.maxDelaySec} s between messages, batches of ${s.batchSize}, ${s.dailyLimit}/day max.\nEstimated time: ${est}.\n\nKeep this window and your phone online while sending.`);
+    const scheduled = scheduleChosen();
+    const ts = scheduled ? scheduledTs() : null;
+    if (scheduled) {
+      const problem = scheduleProblem(ts);
+      if (problem) { toast(problem, true); return; }
+    }
+    const sameDay = !scheduled || new Date(ts).toDateString() === new Date().toDateString();
+    const est = fmtDuration(estimateMs(Math.min(contacts.length, Math.max(0, Number(s.dailyLimit) - (sameDay ? S.sentToday : 0))), s));
+    const from = `+${S.wa.info ? S.wa.info.number : '?'}`;
+    const pacing = `Delay ${s.minDelaySec}–${s.maxDelaySec} s between messages, batches of ${s.batchSize}, ${s.dailyLimit}/day max.\nEstimated sending time: ${est}.`;
+    const ok = confirm(scheduled
+      ? `Schedule ${contacts.length} personalized message(s) from ${from} for ${fmtWhen(ts)}?\n\n${pacing}\n\nAt that time this app must be open, the PC on and your phone online.`
+      : `Send ${contacts.length} personalized message(s) from ${from}?\n\n${pacing}\n\nKeep this window and your phone online while sending.`);
     if (!ok) return;
     $('btn-start').disabled = true;
     try {
-      const snap = await api('POST', '/api/campaign/start', { contacts, template, settings: s, name: `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${contacts.length} contacts` });
+      const name = `${scheduled ? `Scheduled ${new Date(ts).toLocaleDateString()} ${new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`} · ${contacts.length} contacts`;
+      const snap = await api('POST', '/api/campaign/start', { contacts, template, settings: s, name, scheduledAt: ts });
       S.campaign = snap;
       renderCampaign(true);
-      toast('Campaign started');
+      toast(scheduled ? `Campaign scheduled for ${fmtWhen(ts)}` : 'Campaign started');
+      if (scheduled) { $('when-now').checked = true; $('when-now').dispatchEvent(new Event('change')); }
     } catch (e) { toast(e.message, true); } finally { $('btn-start').disabled = false; }
+  });
+  $('btn-start-now').addEventListener('click', async () => {
+    if (!confirm('Cancel the scheduled time and start sending now? The usual delays and limits still apply.')) return;
+    try { await api('POST', '/api/campaign/start-now'); toast('Sending starts now'); } catch (e) { toast(e.message, true); }
   });
   $('btn-pause').addEventListener('click', () => api('POST', '/api/campaign/pause').catch(e => toast(e.message, true)));
   $('btn-resume').addEventListener('click', () => api('POST', '/api/campaign/resume').catch(e => toast(e.message, true)));
@@ -483,13 +553,16 @@
     $('btn-resume').title = waReady ? '' : 'Connect WhatsApp first';
     $('btn-stop').hidden = !(state === 'running' || state === 'paused');
     $('btn-retry').hidden = !(c && c.counts && (c.counts.failed > 0 || c.counts.notOnWhatsApp > 0) && state !== 'running');
-    for (const id of ['btn-start', 'btn-pause', 'btn-resume', 'btn-stop', 'btn-retry', 'btn-discard']) {
+    $('btn-start-now').hidden = !(c && (state === 'running' || state === 'paused') && c.scheduledAt && c.scheduledAt > Date.now());
+    for (const id of ['btn-start', 'btn-start-now', 'btn-pause', 'btn-resume', 'btn-stop', 'btn-retry', 'btn-discard']) {
       if (S.offline) $(id).disabled = true;
       else if (id !== 'btn-resume') $(id).disabled = false;
     }
     $('btn-export').hidden = !c;
     $('btn-discard').hidden = !c || state === 'running';
     if (c && (state === 'done' || state === 'stopped')) $('btn-start').hidden = true;
+    // The "when" choice only matters for a new campaign.
+    $('schedule-box').hidden = $('btn-start').hidden;
   }
 
   function renderCampaign(full) {
@@ -504,8 +577,11 @@
       note.hidden = false;
       note.textContent = `The current campaign keeps the values it started with (${cs.minDelaySec}–${cs.maxDelaySec} s, batches of ${cs.batchSize}, ${cs.dailyLimit}/day). Changes here apply to the next campaign.`;
     } else note.hidden = true;
-    const stateCls = { running: 'badge-green', paused: 'badge-amber', done: 'badge-blue', stopped: 'badge-gray', idle: 'badge-gray' }[c.state] || 'badge-gray';
-    $('campaign-state').textContent = c.state === 'running' && c.waiting ? 'running' : c.state;
+    const waitingForSchedule = c.scheduledAt && c.scheduledAt > Date.now() && (c.state === 'running' || c.state === 'paused');
+    const stateCls = waitingForSchedule && c.state === 'running'
+      ? 'badge-blue'
+      : ({ running: 'badge-green', paused: 'badge-amber', done: 'badge-blue', stopped: 'badge-gray', idle: 'badge-gray' }[c.state] || 'badge-gray');
+    $('campaign-state').textContent = waitingForSchedule ? (c.state === 'running' ? 'scheduled' : 'scheduled · paused') : c.state;
     $('campaign-state').className = `badge ${stateCls}`;
     $('campaign-name').textContent = c.name || '';
     const reason = $('campaign-reason');
@@ -567,7 +643,10 @@
   function tickCountdown() {
     const c = S.campaign;
     const el = $('campaign-wait');
+    // The "Send now" button and the "scheduled" badge expire when the time comes.
+    if (!$('btn-start-now').hidden && !(c && c.scheduledAt > Date.now())) renderCampaign(false);
     if (S.offline) { el.textContent = 'Connection to the app lost'; return; }
+    if (c && c.state === 'paused' && c.scheduledAt > Date.now()) { el.textContent = `Scheduled for ${fmtWhen(c.scheduledAt)}`; return; }
     if (!c || c.state !== 'running') { el.textContent = ''; return; }
     if (!c.waiting) { el.textContent = c.counts && c.counts.sending ? 'Sending…' : 'Working…'; return; }
     const remaining = Math.max(0, c.waiting.until - Date.now());
@@ -575,6 +654,7 @@
     const sameDay = until.toDateString() === new Date().toDateString();
     const when = `${sameDay ? '' : `${until.toLocaleDateString([], { weekday: 'long' })} `}${until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     const labels = {
+      'scheduled start': `Scheduled for ${fmtWhen(c.waiting.until)} (in ${fmtDuration(remaining)})`,
       'next message': `Next message in ${fmtDuration(remaining)}`,
       'batch pause': `Batch pause, resuming in ${fmtDuration(remaining)}`,
       'quiet hours': `Quiet hours, resuming ${sameDay ? 'at' : ''} ${when}`,
@@ -655,5 +735,6 @@
     }
   });
 
+  initSchedule();
   updatePreview();
 })();

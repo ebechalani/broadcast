@@ -1,5 +1,5 @@
-Name,Whatsapp,Prefix,Last Name,School
-Rita,70 000 001,961,Khoury,Lycée A
-Pierre,6 00 00 00 02,+33,Martin,Lycée B
-Sami,71 000 003,961,Haddad,Lycée A
-Nour,76 000 004,961,Saad,Lycée C
+Name,Whatsapp,Prefix,Last Name,School,Country Code
+Rita,70 000 001,Mrs,Khoury,Lycée A,961
+Pierre,6 00 00 00 02,Mr,Martin,Lycée B,33
+Sami,71 000 003,Mr,Haddad,Lycée A,
+Nour,76 000 004,,Saad,Lycée C,

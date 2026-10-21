@@ -55,7 +55,7 @@
     <div class="card-head">
       <h2><span class="step">2</span>Contacts</h2>
       <div class="actions">
-        <a class="btn btn-ghost" href="/samples/teachers-sample.csv" download="teachers-sample.csv" title="Name, Whatsapp, Prefix, Last Name, School">Sample (teachers)</a>
+        <a class="btn btn-ghost" href="/samples/teachers-sample.csv" download="teachers-sample.csv" title="Name, Whatsapp, Prefix (Mr/Mrs), Last Name, School, Country Code">Sample (teachers)</a>
         <a class="btn btn-ghost" href="/samples/contacts-sample.csv" download="contacts-sample.csv" title="Prénom, Nom, Téléphone, Classe">Sample (parents)</a>
       </div>
     </div>
@@ -107,7 +107,7 @@
         <label>Last name <select id="map-lastName"></select></label>
         <label>Full name <select id="map-fullName"></select></label>
         <label>Phone <select id="map-phone"></select></label>
-        <label>Country prefix (optional) <select id="map-phonePrefix"></select></label>
+        <label>Country code (optional) <select id="map-countryCode"></select></label>
         <label class="check"><input type="checkbox" id="map-hasHeader"> First row is a header</label>
         <button id="btn-apply-mapping" class="btn">Apply</button>
       </div>
@@ -152,6 +152,7 @@
       <h2><span class="step">4</span>Send</h2>
       <div class="actions" id="campaign-actions">
         <button id="btn-start" class="btn btn-primary">Start sending</button>
+        <button id="btn-start-now" class="btn btn-primary" hidden title="Cancel the scheduled time and start sending now, at the usual safe pace">Send now</button>
         <button id="btn-pause" class="btn" hidden>Pause</button>
         <button id="btn-resume" class="btn btn-primary" hidden>Resume</button>
         <button id="btn-stop" class="btn btn-danger-outline" hidden>Stop</button>
@@ -176,6 +177,7 @@
         <label class="check"><input type="checkbox" id="s-simulateTyping"> Show "typing…" before each message</label>
         <label class="check"><input type="checkbox" id="s-quietHoursEnabled"> Do not send between
           <input type="time" id="s-quietStart"> and <input type="time" id="s-quietEnd"></label>
+        <label class="check" title="Stops Windows from going to sleep while a campaign is running or scheduled. The screen can still turn off."><input type="checkbox" id="s-keepAwake"> Keep this PC awake while a campaign is running or scheduled</label>
       </div>
       <div id="settings-warn" class="warn small" hidden></div>
       <div id="settings-note" class="muted small" hidden></div>
@@ -183,6 +185,14 @@
         <b>Staying safe.</b> WhatsApp bans numbers that behave like bots: many messages in a short time, identical text, messages to people who never saved your number, and recipients tapping <i>Report</i> or <i>Block</i>. Keep the random delay, keep batches small, stay well under 200 messages a day on a personal number (far less on a brand-new one), write a message people expect from you, and let them reply or opt out. Prefer sending to people who already have your number saved. Unofficial automation is against WhatsApp's terms; for large volumes use the official WhatsApp Business Platform.
       </div>
     </details>
+
+    <div id="schedule-box" class="schedule">
+      <span class="schedule-title">When</span>
+      <label class="check"><input type="radio" name="when" id="when-now" value="now" checked> Send now</label>
+      <label class="check"><input type="radio" name="when" id="when-later" value="later"> Schedule for
+        <input type="datetime-local" id="schedule-at" disabled></label>
+      <span class="muted small">A scheduled campaign needs this app open, the PC on and your phone online at that time.</span>
+    </div>
 
     <div id="estimate" class="estimate muted"></div>
 
