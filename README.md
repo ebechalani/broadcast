@@ -81,9 +81,12 @@ Numbers may be written with spaces, dashes, dots, parentheses, `+` or `00`, with
 | `{{phone}}` | The number in international format |
 | `{{Prefix}}` (also `{{title}}`, `{{civilité}}`) | The title column (Mr, Mrs…) |
 | `{{Any column}}` | Any other column of your file, e.g. `{{School}}`, `{{Classe}}` |
-| `{{Prefix|colleague}}` | Fallback text when the value is empty |
+| `{{Prefix\|colleague}}` | Fallback text when the value is empty |
+| `{Bonjour\|Bonsoir\|Cher collègue}` | Variation: each person gets one of the options |
 
 Placeholder names are case- and accent-insensitive. When a placeholder is empty for a contact and has no fallback, the space next to it is removed, so `Dear {{Prefix}} {{lastName}},` gives `Dear Saad,` rather than `Dear  Saad,`.
+
+**Variations.** Single braces with `|` inside are a choice of words: `{Bonjour|Bonsoir|Cher collègue}` becomes one of the three for each person. Options can be empty (`{|Merci de confirmer.}`), can be nested, and can contain placeholders. The choice is stable per person, so the preview and the test message show exactly what that person receives, and the page shows how many different versions the message has. Identical text to many people is one of WhatsApp's spam signals; variations reduce it but do not prevent a ban on their own. See [GUIDE.md](GUIDE.md) Part 5 for examples.
 
 ## Staying safe (please read)
 
@@ -92,7 +95,7 @@ WhatsApp does not allow bulk or automated messaging from the normal app and bans
 1. **Recipients reporting or blocking you.** This is the strongest signal. Only message people who expect to hear from you (parents, members, customers who gave you their number), say who you are in the first line, and make it easy to reply or opt out.
 2. **Messaging people who do not have your number saved.** A few are fine; hundreds in a day are not. Ask people to save your number.
 3. **Volume and speed.** Many messages in a short window, every day, with no replies coming back.
-4. **Identical text.** Personalizing with the first name already helps; vary the wording between campaigns.
+4. **Identical text.** Names alone are not enough: use variations (`{Bonjour|Bonsoir}`) so each message differs, and change the wording between campaigns.
 5. **Numbers that are not on WhatsApp.** Each failed delivery counts against you. Keep *Skip numbers that are not on WhatsApp* enabled.
 6. **A brand-new number** that immediately starts broadcasting. Use a number that has been in normal use for weeks, with real conversations on it.
 

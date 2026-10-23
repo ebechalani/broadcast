@@ -127,6 +127,44 @@ Two sample files are in the `samples` folder and behind the **Sample** buttons o
 
 Writing tips that reduce the risk of being reported: say who you are in the first line, keep it short, make it clearly about something the person expects from you, and tell them they can reply.
 
+### Vary the wording (recommended)
+
+WhatsApp notices when the same text is sent to many people. Names alone change only a word or two, so the messages still look identical. To make them really different, give the app a choice of words: write the options inside **single** braces, separated by a vertical bar `|`. Each teacher gets one option, picked at random.
+
+| You write | Teachers receive one of |
+| --- | --- |
+| `{Bonjour\|Bonsoir\|Cher collègue}` | "Bonjour", "Bonsoir" or "Cher collègue" |
+| `{La réunion aura lieu\|Nous nous retrouverons} jeudi à 17h.` | "La réunion aura lieu jeudi à 17h." or "Nous nous retrouverons jeudi à 17h." |
+| `jeudi à 17h. {\|Merci de confirmer votre présence.}` | the sentence alone, or followed by "Merci de confirmer votre présence." (an empty option means "nothing") |
+
+To insert one quickly, select some words in the message and click the dashed chip **{ variation | … }**: your words become the first option and you type the second one. Without a selection it inserts `{Bonjour|Bonsoir}` for you to edit.
+
+Example for the teachers list:
+
+```text
+{Bonjour|Bonsoir|Cher collègue} {{Prefix}} {{lastName}},
+
+{La réunion des enseignants|Le conseil pédagogique} de {{School}} {aura lieu|se tiendra} jeudi à 17h en salle 12.
+{Merci de confirmer votre présence en répondant à ce message.|Pouvez-vous confirmer votre présence par un simple « OK » ?}
+
+{Bien cordialement|Merci et à jeudi},
+L'administration
+```
+
+This one message gives 3 × 2 × 2 × 2 × 2 = **48 different versions**. The line under the message box shows how many versions yours has. If it says everyone gets the same text, add a few choices.
+
+Good to know:
+
+- Vary the greeting, the closing and one or two sentences. **Never vary the facts** (date, time, place, amounts): every option must say the same thing.
+- Each option must read correctly in the sentence, including agreement: write "La réunion … aura lieu" and "Le conseil … se tiendra" as whole options rather than mixing a feminine subject with a masculine one.
+- Placeholders can go inside options: `{Bonjour {{firstName}}|Bonsoir {{Prefix}} {{lastName}}}`.
+- Spaces around the `|` do not matter: `{Bonjour | Bonsoir}` works too.
+- Each teacher always gets the same version of a given message, so the **Preview** and **Send a test to myself** show exactly what that person will receive. Pick different people in the preview drop-down to see other versions.
+- Double braces `{{ }}` are placeholders, single braces `{ | }` are choices. Braces without a `|` inside stay as written.
+- If you forget the closing `}`, the preview warns you.
+
+Variations make messages less alike, which helps, but they do **not** prevent a ban on their own: the most important points are in Part 10.
+
 ---
 
 ## Part 6 – Settings (box 4, "Pacing & safety settings")
@@ -230,7 +268,7 @@ WhatsApp is not designed for bulk sending and bans numbers that look like robots
 1. **People reporting or blocking you.** Only write to people who expect to hear from you (parents, members, customers who gave you their number). Say who you are. Let them answer.
 2. **Writing to many people who do not have your number saved.** Ask them to save it (put it in your school communications).
 3. **Too many messages, too fast, every day.** Keep the defaults. Spread a big list over several days.
-4. **Identical text to everyone.** The first name already helps. Change the wording between campaigns.
+4. **Identical text to everyone.** Names alone are not enough. Use variations (Part 5, "Vary the wording") so the message has dozens of versions, and change the wording between campaigns.
 5. **Numbers that are not on WhatsApp.** Keep the check on.
 6. **A brand-new number** that immediately broadcasts. Use a number that has had normal conversations for a few weeks, and start with small batches (20–30 a day).
 

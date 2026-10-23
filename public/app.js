@@ -242,17 +242,46 @@
   function renderPlaceholderChips() {
     const extra = S.parse && S.parse.extraHeaders ? S.parse.extraHeaders : [];
     const keys = ['firstName', 'lastName', 'fullName', ...extra];
-    $('placeholder-chips').innerHTML = keys.map(k => `<button type="button" class="chip" data-ph="${esc(k)}">{{${esc(k)}}}</button>`).join('');
+    $('placeholder-chips').innerHTML = keys.map(k => `<button type="button" class="chip" data-ph="${esc(k)}">{{${esc(k)}}}</button>`).join('')
+      + '<button type="button" class="chip chip-variation" data-variation="1" title="Insert a choice of words: each teacher gets one of them. Selected text becomes the first option.">{ variation | … }</button>';
   }
+  renderPlaceholderChips();
   $('placeholder-chips').addEventListener('click', e => {
+    const start = templateEl.selectionStart || 0, end = templateEl.selectionEnd || 0;
+    if (e.target.closest('[data-variation]')) {
+      // Wrap the selected words, or insert an example to edit.
+      const selected = templateEl.value.slice(start, end).trim();
+      const first = selected || 'Bonjour';
+      const ins = `{${first}|${selected ? 'other wording' : 'Bonsoir'}}`;
+      templateEl.setRangeText(ins, start, end, 'end');
+      // Select the second option so it can be typed over.
+      const secondStart = start + first.length + 2;
+      templateEl.setSelectionRange(secondStart, start + ins.length - 1);
+      templateEl.focus();
+      templateEl.dispatchEvent(new Event('input'));
+      return;
+    }
     const btn = e.target.closest('[data-ph]');
     if (!btn) return;
     const ins = `{{${btn.dataset.ph}}}`;
-    const start = templateEl.selectionStart || 0, end = templateEl.selectionEnd || 0;
     templateEl.setRangeText(ins, start, end, 'end');
     templateEl.focus();
     templateEl.dispatchEvent(new Event('input'));
   });
+
+  function renderVariationInfo(variants, contactCount) {
+    const el = $('variation-info');
+    if (!templateEl.value.trim()) { el.hidden = true; return; }
+    el.hidden = false;
+    if (variants > 1) {
+      el.classList.remove('low');
+      const n = variants >= 1e9 ? 'over a billion' : variants.toLocaleString();
+      el.textContent = `This message has ${n} possible versions. Each person gets one of them; the preview shows the exact version for the selected person.`;
+    } else {
+      el.classList.toggle('low', contactCount > 10);
+      el.textContent = 'Everyone gets the same text apart from the names. Identical messages to many people look like spam: vary a few words with {Bonjour|Bonsoir|Cher collègue}.';
+    }
+  }
 
   function renderPreviewSelect() {
     const sel = $('preview-contact');
@@ -279,7 +308,7 @@
     const template = templateEl.value;
     $('template-length').textContent = template.length;
     const out = $('preview-text'), warn = $('preview-warn');
-    if (!template.trim()) { out.textContent = 'Your message will appear here.'; out.classList.add('muted'); warn.hidden = true; return; }
+    if (!template.trim()) { out.textContent = 'Your message will appear here.'; out.classList.add('muted'); warn.hidden = true; $('variation-info').hidden = true; return; }
     const id = $('preview-contact').value;
     const contact = okContacts().find(c => c.id === id) || { firstName: 'Jean', lastName: 'Dupont', phoneDisplay: '+961 70 123 456', extra: {} };
     try {
@@ -291,9 +320,10 @@
       const missing = r.missing.filter(m => !unknownKeys.has(m.toLowerCase()));
       if (r.unknown.length) problems.push(`Unknown placeholder(s): ${r.unknown.map(u => `{{${u}}}`).join(', ')} — not a column of your file, so it will be left empty.`);
       if (missing.length) problems.push(`Empty for this contact: ${missing.map(u => `{{${u}}}`).join(', ')}.`);
-      if (r.leftover) problems.push('The message still contains "{{" or "}}": check that every placeholder is written like {{Name}}.');
+      if (r.leftover) problems.push('The message still contains "{{", "}}" or an unfinished {…|…}: check that every placeholder is written like {{Name}} and every variation is closed with }.');
       warn.hidden = !problems.length;
       warn.textContent = problems.join(' ');
+      renderVariationInfo(r.variants || 1, okContacts().length);
     } catch (e) {
       out.textContent = e.message;
     }

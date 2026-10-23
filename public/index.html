@@ -134,8 +134,9 @@
     <div class="chips" id="placeholder-chips"></div>
     <textarea id="template" rows="7" placeholder="Bonjour {{firstName}},&#10;&#10;..."></textarea>
     <div class="row between wrap">
-      <div class="muted small"><span id="template-length">0</span> characters. Use <code>{{firstName}}</code>, <code>{{lastName}}</code>, <code>{{fullName}}</code> or any column name. <code>{{firstName|there}}</code> gives a fallback.</div>
+      <div class="muted small"><span id="template-length">0</span> characters. Use <code>{{firstName}}</code>, <code>{{lastName}}</code>, <code>{{fullName}}</code> or any column name. <code>{{firstName|there}}</code> gives a fallback. <code>{Bonjour|Bonsoir|Cher collègue}</code> picks one of the options for each person.</div>
     </div>
+    <div id="variation-info" class="variation-info small" hidden></div>
     <div class="preview">
       <div class="preview-head">
         <span>Preview for</span>

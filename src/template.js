@@ -55,16 +55,120 @@ function cleanValue(value) {
   return s.replace(INVISIBLE, '').trim() === '' ? null : s;
 }
 
+// ----- Text variations: "{Bonjour|Bonsoir|Cher collègue}" -----
+// A single-brace group with at least one "|" is replaced by one of its options.
+// Groups can be nested and can contain {{placeholders}}; "{{...}}" is never a group,
+// and braces without "|" ("{world}") stay as written.
+
+/** For a "{" at `start` (not "{{"), the group's end index and its options, or null. */
+function readGroup(s, start) {
+  let depth = 0;
+  let partStart = start + 1;
+  const parts = [];
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '{' && s[i + 1] === '{' && i !== start) {
+      const close = s.indexOf('}}', i + 2);
+      if (close < 0) return null;
+      i = close + 1;
+      continue;
+    }
+    if (ch === '{') { depth++; continue; }
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) { parts.push(s.slice(partStart, i)); return { end: i, parts }; }
+      continue;
+    }
+    if (ch === '|' && depth === 1) { parts.push(s.slice(partStart, i)); partStart = i + 1; }
+  }
+  return null;
+}
+
+/**
+ * Walk the template; onGroup(parts, before, after) returns the replacement for
+ * each variation group, where before/after are the characters just outside it.
+ */
+function walkVariations(s, onGroup) {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '{' && s[i + 1] === '{') {
+      const close = s.indexOf('}}', i + 2);
+      if (close < 0) { out += s.slice(i); break; }
+      out += s.slice(i, close + 2);
+      i = close + 1;
+      continue;
+    }
+    if (ch === '{') {
+      const g = readGroup(s, i);
+      if (g && g.parts.length > 1) {
+        out += onGroup(g.parts, out[out.length - 1], s[g.end + 1]);
+        i = g.end;
+        continue;
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+const isGap = ch => ch === undefined || /[\s\u0000]/.test(ch);
+
+function expandVariations(s, rand) {
+  return walkVariations(s, (parts, before, after) => {
+    const pick = parts[Math.floor(rand() * parts.length)];
+    const expanded = expandVariations(pick, rand);
+    const core = expanded.replace(/^[ \t]+|[ \t]+$/g, '');
+    if (core === '') return EMPTY; // an empty option is tidied like an empty placeholder
+    // Spaces next to "|" are just formatting ("{Bonjour | Salut}"), but a space at the edge
+    // of an option is kept when the text outside has none ("17h.{| Merci de confirmer.}").
+    const lead = /^[ \t]/.test(expanded) && !isGap(before) ? ' ' : '';
+    const trail = /[ \t]$/.test(expanded) && !isGap(after) ? ' ' : '';
+    return lead + core + trail;
+  });
+}
+
+/** How many different texts the variations can produce (capped). */
+function countVariations(template) {
+  const CAP = 1e9;
+  let total = 1;
+  walkVariations(String(template || ''), parts => {
+    const n = parts.reduce((sum, p) => sum + countVariations(p), 0);
+    total = Math.min(CAP, total * n);
+    return '';
+  });
+  return total;
+}
+
+/** Deterministic random numbers from a text seed (FNV-1a hash + mulberry32). */
+function seededRandom(seed) {
+  let h = 2166136261 >>> 0;
+  for (const c of String(seed)) { h ^= c.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; }
+  let a = h || 1;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /**
  * Render a message template for one contact.
  * Returns { text, missing, leftover } where missing lists placeholders that had
- * no value (each once) and leftover is true when "{{" or "}}" remain in the text.
+ * no value (each once) and leftover is true when "{{", "}}" or an unfinished
+ * "{a|b" variation remain in the text.
+ * Variations are picked per contact: the same teacher always gets the same
+ * version of a given message, so the preview shows exactly what is sent.
  */
 function render(template, contact) {
   const vars = buildVars(contact);
   const missing = [];
   const missingKeys = new Set();
-  const raw = String(template === undefined || template === null ? '' : template)
+  const source = String(template === undefined || template === null ? '' : template);
+  const c = contact || {};
+  const rand = seededRandom(`${c.phone || c.e164 || c.id || ''}|${c.firstName || ''}|${c.lastName || ''}|${source}`);
+  const raw = expandVariations(source, rand)
     .replace(PLACEHOLDER_RE, (match, key, fallback) => {
       const nk = normKey(key);
       const canonical = ALIASES[nk] || nk;
@@ -87,7 +191,7 @@ function render(template, contact) {
       return text;
     });
   const text = tidyEmpty(raw);
-  return { text, missing, leftover: /\{\{|\}\}/.test(text) };
+  return { text, missing, leftover: /\{\{|\}\}|\{[^{}]*\|/.test(text) };
 }
 
 // Marks where a placeholder rendered empty, so the spaces around it can be tidied:
@@ -150,4 +254,4 @@ function unknownPlaceholders(template, extraColumns = []) {
   });
 }
 
-module.exports = { render, placeholders, placeholderUses, unknownPlaceholders, normKey, ALIASES, BUILTIN_PLACEHOLDERS, TITLE_KEYS };
+module.exports = { render, placeholders, placeholderUses, unknownPlaceholders, countVariations, normKey, ALIASES, BUILTIN_PLACEHOLDERS, TITLE_KEYS };

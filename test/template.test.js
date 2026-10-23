@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { render, placeholders, unknownPlaceholders, normKey } = require('../src/template');
+const { render, placeholders, unknownPlaceholders, normKey, countVariations } = require('../src/template');
 
 const contact = { firstName: 'Jean', lastName: 'Dupont', phoneDisplay: '+961 70 123 456', extra: { Classe: '6ème B', 'Montant dû': '150' } };
 
@@ -83,6 +83,50 @@ test('title synonyms prefer an honorific column and skip blank ones', () => {
 test('a placeholder with a fallback is not reported as unknown', () => {
   assert.deepEqual(unknownPlaceholders('Dear {{Prefix|colleague}} {{lastName}}', ['School']), []);
   assert.deepEqual(unknownPlaceholders('Dear {{Prefix|colleague}} {{Prefix}}', ['School']), ['Prefix']);
+});
+
+function people(n) {
+  return Array.from({ length: n }, (_, i) => ({ firstName: `P${i}`, lastName: `L${i}`, phone: String(96170000000 + i), extra: { Prefix: i % 3 ? 'Mrs' : '', School: 'Lycée A' } }));
+}
+
+test('variations: each person gets one option, always the same one, and all options get used', () => {
+  const t = '{Bonjour|Bonsoir|Cher collègue} {{lastName}}';
+  const seen = new Set();
+  for (const c of people(60)) {
+    const a = render(t, c).text;
+    assert.equal(render(t, c).text, a, 'stable for the same person');
+    assert.match(a, /^(Bonjour|Bonsoir|Cher collègue) L\d+$/);
+    seen.add(a.split(' L')[0]);
+  }
+  assert.deepEqual([...seen].sort(), ['Bonjour', 'Bonsoir', 'Cher collègue']);
+});
+
+test('variations: nesting, placeholders inside options, fallbacks and literal braces', () => {
+  const c = { firstName: 'Rita', lastName: 'Khoury', phone: '96170000001', extra: { Prefix: '' } };
+  const nested = new Set(people(80).map(p => render('{A|{B|C}}', p).text));
+  assert.deepEqual([...nested].sort(), ['A', 'B', 'C']);
+  assert.match(render('{Bonjour {{firstName}}|Salut {{lastName}}}!', c).text, /^(Bonjour Rita|Salut Khoury)!$/);
+  assert.equal(render('Dear {{Prefix|colleague}}', c).text, 'Dear colleague', 'a placeholder fallback is not a variation');
+  assert.equal(render('Hello {world}', c).text, 'Hello {world}', 'braces without | stay as written');
+  const unfinished = render('Oops {Bonjour|Salut', c);
+  assert.equal(unfinished.text, 'Oops {Bonjour|Salut');
+  assert.equal(unfinished.leftover, true);
+});
+
+test('variations: spacing around | and optional text', () => {
+  const texts = t => new Set(people(60).map(p => render(t, { ...p, lastName: 'Saad' }).text));
+  assert.deepEqual([...texts('{Bonjour | Salut} {{lastName}},')].sort(), ['Bonjour Saad,', 'Salut Saad,']);
+  assert.deepEqual([...texts('17h.{| Merci de confirmer.}')].sort(), ['17h.', '17h. Merci de confirmer.']);
+  assert.deepEqual([...texts('17h. {|Merci de confirmer.}')].sort(), ['17h.', '17h. Merci de confirmer.']);
+  assert.deepEqual([...texts('Bonjour {cher collègue|} {{lastName}},')].sort(), ['Bonjour Saad,', 'Bonjour cher collègue Saad,']);
+});
+
+test('countVariations multiplies independent choices and adds nested ones', () => {
+  assert.equal(countVariations('no choice here'), 1);
+  assert.equal(countVariations('{a|b} {c|d|e}'), 6);
+  assert.equal(countVariations('{a|{b|c}}'), 3);
+  assert.equal(countVariations('{{Prefix|colleague}} {x|y}'), 2);
+  assert.equal(countVariations('{world}'), 1);
 });
 
 test('text spacing is untouched when every placeholder has a value', () => {

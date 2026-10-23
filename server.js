@@ -10,7 +10,7 @@ const { Server } = require('socket.io');
 
 const config = require('./src/config');
 const { parseContacts } = require('./src/contacts');
-const { render, unknownPlaceholders } = require('./src/template');
+const { render, unknownPlaceholders, countVariations } = require('./src/template');
 const { Campaign, DEFAULT_SETTINGS, sanitizeSettings, estimateDurationMs } = require('./src/campaign');
 const { JsonFile, DailyCounter, CampaignStore } = require('./src/store');
 const WhatsApp = require('./src/whatsapp');
@@ -278,7 +278,7 @@ app.post('/api/contacts/parse', upload.single('file'), wrap((req, res) => {
 app.post('/api/preview', wrap((req, res) => {
   const { template, contact, extraColumns } = req.body || {};
   const out = render(template || '', contact || {});
-  res.json({ ...out, unknown: unknownPlaceholders(template || '', extraColumns || []) });
+  res.json({ ...out, unknown: unknownPlaceholders(template || '', extraColumns || []), variants: countVariations(template || '') });
 }));
 
 app.post('/api/estimate', wrap((req, res) => {
