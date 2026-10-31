@@ -61,6 +61,18 @@ The link is remembered. The next time you start the app it reconnects by itself,
 
 The app reads an Excel file (`.xlsx`) or a CSV file, or rows pasted straight from Excel.
 
+### Easiest: download a ready-made Excel template
+
+1. In box 2 **Contacts**, click **Excel template…**
+2. In **How many variables to add**, type how many extra pieces of information you want per person (0 to 20). Examples: school, class, amount due, meeting date.
+3. A box appears for each variable: give it a name (for example `School`). Leave it empty to keep `Variable 1`, `Variable 2`…
+4. Click **Download Excel template**. You get `contacts-template.xlsx` with these columns: **Prefix, First Name, Last Name, Country Code, WhatsApp Number**, then your variables. A second sheet, **Instructions**, explains each column.
+5. Fill in one person per row, save, and drop the file back into box 2.
+
+In the message, each variable is used with its name between double braces: `{{School}}`, `{{Variable 1}}`.
+
+Names such as *Phone*, *Mobile*, *Nom* or *Prénom* are refused because the app would mistake them for the name or number columns. Pick another name and try again.
+
 ### How the file should look
 
 One line per person, with a header row on top. This is the teachers list layout, which works as is:

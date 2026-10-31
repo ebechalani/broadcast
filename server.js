@@ -10,6 +10,7 @@ const { Server } = require('socket.io');
 
 const config = require('./src/config');
 const { parseContacts } = require('./src/contacts');
+const { buildTemplate, cleanVariableNames } = require('./src/xlsxTemplate');
 const { render, unknownPlaceholders, countVariations } = require('./src/template');
 const { Campaign, DEFAULT_SETTINGS, sanitizeSettings, estimateDurationMs } = require('./src/campaign');
 const { JsonFile, DailyCounter, CampaignStore } = require('./src/store');
@@ -395,6 +396,15 @@ app.get('/api/campaign/export.csv', wrap((req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="broadcast-${campaign.id}.csv"`);
   res.send('﻿' + lines.join('\r\n'));
+}));
+
+// Excel template with the standard columns plus the variables the user asked for.
+app.post('/api/template.xlsx', wrap((req, res) => {
+  const body = req.body || {};
+  const names = cleanVariableNames(body.count, body.names);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="contacts-template.xlsx"');
+  res.send(buildTemplate(names));
 }));
 
 app.get('/api/sample.csv', (req, res) => res.sendFile(path.join(__dirname, 'samples', 'contacts-sample.csv')));

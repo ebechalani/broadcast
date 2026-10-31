@@ -140,6 +140,66 @@
     const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (f) loadSource({ file: f });
   });
+  // ----- Excel template builder -----
+  const tplNames = []; // remembers typed names when the count goes down then up again
+  function renderTemplateVars() {
+    const box = $('tpl-var-names');
+    box.querySelectorAll('input').forEach((input, i) => { tplNames[i] = input.value; });
+    const n = Math.max(0, Math.min(20, Math.round(Number($('tpl-var-count').value) || 0)));
+    box.textContent = '';
+    for (let i = 0; i < n; i++) {
+      const label = document.createElement('label');
+      label.className = 'field';
+      const span = document.createElement('span');
+      span.textContent = `Variable ${i + 1} name`;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 40;
+      input.placeholder = `Variable ${i + 1}`;
+      input.value = tplNames[i] || '';
+      label.append(span, input);
+      box.append(label);
+    }
+  }
+  $('btn-template-toggle').addEventListener('click', () => {
+    const panel = $('template-builder');
+    panel.hidden = !panel.hidden;
+    $('btn-template-toggle').setAttribute('aria-expanded', String(!panel.hidden));
+    if (!panel.hidden) $('tpl-var-count').focus();
+  });
+  $('tpl-var-count').addEventListener('input', renderTemplateVars);
+  $('btn-download-template').addEventListener('click', async () => {
+    const count = Number($('tpl-var-count').value) || 0;
+    const names = Array.from($('tpl-var-names').querySelectorAll('input'), i => i.value.trim());
+    const btn = $('btn-download-template');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/template.xlsx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count, names }),
+      });
+      if (!res.ok) {
+        let msg = `${res.status} ${res.statusText}`;
+        try { msg = (await res.json()).error || msg; } catch { /* keep the status text */ }
+        throw new Error(msg);
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'contacts-template.xlsx';
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      toast('Template downloaded. Fill it in, save it, then drop it here.');
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   $('btn-parse-text').addEventListener('click', () => {
     const text = $('paste-input').value;
     if (!text.trim()) { toast('Paste some rows first', true); return; }
