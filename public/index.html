@@ -55,8 +55,20 @@
     <div class="card-head">
       <h2><span class="step">2</span>Contacts</h2>
       <div class="actions">
+        <button id="btn-template-toggle" class="btn" aria-expanded="false" aria-controls="template-builder">Excel template…</button>
         <a class="btn btn-ghost" href="/samples/teachers-sample.csv" download="teachers-sample.csv" title="Name, Whatsapp, Prefix (Mr/Mrs), Last Name, School, Country Code">Sample (teachers)</a>
         <a class="btn btn-ghost" href="/samples/contacts-sample.csv" download="contacts-sample.csv" title="Prénom, Nom, Téléphone, Classe">Sample (parents)</a>
+      </div>
+    </div>
+    <div id="template-builder" class="tpl-builder" hidden>
+      <div><b>Get an empty Excel file to fill in</b></div>
+      <div class="muted small">It always has <i>Prefix, First Name, Last Name, Country Code, WhatsApp Number</i>. Add your own variables (school, class, amount, date…) and use them in the message as <code>{{Variable name}}</code>.</div>
+      <div class="row gap wrap">
+        <label class="field"><span>How many variables to add (0–20)</span><input type="number" id="tpl-var-count" min="0" max="20" value="0"></label>
+      </div>
+      <div id="tpl-var-names" class="tpl-var-names"></div>
+      <div class="row gap wrap">
+        <button id="btn-download-template" class="btn btn-primary">Download Excel template</button>
       </div>
     </div>
     <div class="contacts-input">

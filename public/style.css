@@ -121,7 +121,7 @@ a { color: var(--accent); }
 .dz-icon { font-size: 26px; color: var(--accent); }
 .or { align-self: center; color: var(--muted); font-weight: 600; }
 .paste-box { display: grid; gap: 8px; }
-textarea, input[type="number"], input[type="time"], input[type="datetime-local"], select {
+textarea, input[type="text"], input[type="number"], input[type="time"], input[type="datetime-local"], select {
   font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; width: 100%;
 }
 textarea { resize: vertical; min-height: 90px; }
@@ -186,3 +186,9 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow); font-weight: 600; z-index: 100; max-width: calc(100vw - 32px); }
 .toast.error { background: var(--danger); color: #fff; }
+
+/* Excel template builder */
+.tpl-builder { display: grid; gap: 10px; padding: 14px; border: 1px dashed var(--border); border-radius: var(--radius); }
+.tpl-builder[hidden] { display: none; }
+.tpl-var-names { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.tpl-var-names:empty { display: none; }
