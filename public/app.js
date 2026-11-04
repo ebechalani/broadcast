@@ -212,6 +212,12 @@
     parseSource(S.mappingTouched && S.parse ? { mapping: S.parse.mapping, hasHeader: S.parse.hasHeader } : undefined);
   });
 
+  $('keep-duplicates').addEventListener('change', () => {
+    saveSettings({ keepDuplicates: $('keep-duplicates').checked });
+    if (!S.source) return;
+    parseSource(S.mappingTouched && S.parse ? { mapping: S.parse.mapping, hasHeader: S.parse.hasHeader } : undefined);
+  });
+
   function loadSource(source) {
     S.source = source;
     S.mappingTouched = false;
@@ -224,6 +230,7 @@
     if (S.source.file) fd.append('file', S.source.file, S.source.file.name);
     else fd.append('text', S.source.text);
     fd.append('defaultCountry', $('default-country').value);
+    fd.append('keepDuplicates', String($('keep-duplicates').checked));
     if (override) {
       if (override.mapping) fd.append('mapping', JSON.stringify(override.mapping));
       if (typeof override.hasHeader === 'boolean') fd.append('hasHeader', String(override.hasHeader));
@@ -238,7 +245,7 @@
       schedulePreview();
       updateEstimate();
       const st = result.stats;
-      toast(`${st.ok} contact(s) ready${st.invalid ? `, ${st.invalid} invalid` : ''}${st.duplicate ? `, ${st.duplicate} duplicate(s)` : ''}`);
+      toast(`${st.ok} message(s) ready${st.sharedNumber ? ` (${st.sharedNumber} to a number already in the list)` : ''}${st.invalid ? `, ${st.invalid} invalid` : ''}${st.duplicate ? `, ${st.duplicate} duplicate(s) left out` : ''}`);
     } catch (e) {
       toast(e.message, true);
     }
@@ -278,7 +285,8 @@
     summary.innerHTML = [
       `<span class="badge badge-green">${stats.ok} ready</span>`,
       stats.invalid ? `<span class="badge badge-red">${stats.invalid} invalid</span>` : '',
-      stats.duplicate ? `<span class="badge badge-amber">${stats.duplicate} duplicate</span>` : '',
+      stats.sharedNumber ? `<span class="badge badge-blue" title="These rows use a number that is already in the list: each one still gets its own message">${stats.sharedNumber} same number, own message</span>` : '',
+      stats.duplicate ? `<span class="badge badge-amber" title="Left out: not sent">${stats.duplicate} duplicate</span>` : '',
       `<span class="muted small">${stats.total} row(s) read${S.source && S.source.file ? ` from ${esc(S.source.file.name)}` : ''}${S.parse.headerRow > 1 ? ` · header found on row ${S.parse.headerRow}` : ''}${S.parse.extraHeaders && S.parse.extraHeaders.length ? ` · extra columns: ${S.parse.extraHeaders.map(esc).join(', ')}` : ''}${S.parse.mapping && S.parse.mapping.countryCode ? ` · country code from: ${esc(S.parse.mapping.countryCode)}` : ''}${S.parse.mapping && S.parse.mapping.phoneFallbacks && S.parse.mapping.phoneFallbacks.length ? ` · also using numbers from: ${S.parse.mapping.phoneFallbacks.map(esc).join(', ')}` : ''}</span>`,
     ].join(' ');
     wrap.hidden = false;
@@ -419,6 +427,7 @@
     const cc = String(s.defaultCountry || 'LB').toUpperCase();
     if (![...countrySel.options].some(o => o.value === cc)) countrySel.add(new Option(`${cc} (configured)`, cc));
     countrySel.value = cc;
+    $('keep-duplicates').checked = s.keepDuplicates === true;
     renderDailyBadge();
     validateSettings();
     updateEstimate();
@@ -437,12 +446,13 @@
     const pauseMin = $('s-batchPauseMin').value;
     out.batchPauseSec = pauseMin === '' ? (fallback('batchPauseSec') || 0) : Math.round(Number(pauseMin) * 60);
     out.defaultCountry = $('default-country').value;
+    out.keepDuplicates = $('keep-duplicates').checked;
     return out;
   }
 
   function editingSettings() {
     const a = document.activeElement;
-    return Boolean(a && /^(s-|default-country$)/.test(a.id || ''));
+    return Boolean(a && /^(s-|default-country$|keep-duplicates$)/.test(a.id || ''));
   }
   // Reflect the server's (clamped) values unless the user is typing in the form right now.
   function syncSettingsForm() {
@@ -590,7 +600,7 @@
     if (!ok) return;
     $('btn-start').disabled = true;
     try {
-      const name = `${scheduled ? `Scheduled ${new Date(ts).toLocaleDateString()} ${new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`} · ${contacts.length} contacts`;
+      const name = `${scheduled ? `Scheduled ${new Date(ts).toLocaleDateString()} ${new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`} · ${contacts.length} messages`;
       const snap = await api('POST', '/api/campaign/start', { contacts, template, settings: s, name, scheduledAt: ts });
       S.campaign = snap;
       renderCampaign(true);

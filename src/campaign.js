@@ -366,6 +366,17 @@ class Campaign extends EventEmitter {
     }
   }
 
+  /** What an earlier row with the same number found out: its chat id, or that it is not on WhatsApp. */
+  _knownNumber(item, index) {
+    for (let i = 0; i < this.items.length; i++) {
+      const other = this.items[i];
+      if (i === index || other.phone !== item.phone) continue;
+      if (other.status === 'not_on_whatsapp' && this.settings.checkRegistered) return { notOnWhatsApp: true };
+      if (other.chatId && (other.status === 'sent' || other.status === 'failed')) return { chatId: other.chatId };
+    }
+    return null;
+  }
+
   async _sendItem(index) {
     const item = this.items[index];
     item.status = 'sending';
@@ -384,6 +395,19 @@ class Campaign extends EventEmitter {
     try {
       const { text } = render(this.template, item);
       let chatId = item.chatId;
+      // The same number can be on several rows (a parent of three children gets
+      // three messages): reuse what an earlier row learned about it.
+      const known = chatId ? null : this._knownNumber(item, index);
+      if (known && known.notOnWhatsApp) {
+        item.status = 'not_on_whatsapp';
+        item.error = 'Number is not registered on WhatsApp';
+        // Not a new "not on WhatsApp" answer: does not count toward the safety pause.
+        this._log('warn', `Skipped ${who} (${item.phoneDisplay}): not on WhatsApp (same number as an earlier row)`);
+        this.emit('item', { index, item });
+        this._emitState();
+        return;
+      }
+      if (known && known.chatId) chatId = item.chatId = known.chatId;
       if (!chatId) {
         if (this.settings.checkRegistered) {
           chatId = await this.client.resolveChatId(item.phone);

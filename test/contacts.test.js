@@ -276,3 +276,29 @@ test('splitFullName heuristics', () => {
   assert.deepEqual(splitFullName('ABOU KHALIL Marie'), { firstName: 'Marie', lastName: 'ABOU KHALIL' });
   assert.deepEqual(splitFullName(''), { firstName: '', lastName: '' });
 });
+
+test('keepDuplicates: one message per row for a shared number, identical rows still left out', () => {
+  const text = [
+    'Prénom,Nom,Téléphone,Enfant',
+    'Rita,Khoury,70 123 456,Karim',
+    'Rita,Khoury,+961 70 123 456,Lea',
+    'Rita,Khoury,0096170123456,Nour',
+    'rita, KHOURY ,70123456,  karim ', // same parent, same child: copy-paste repeat
+    'Jean,Dupont,71 000 001,Paul',
+  ].join('\n');
+  const kept = parseContacts({ text }, { defaultCountry: 'LB', keepDuplicates: true });
+  assert.deepEqual(kept.contacts.map(c => c.status), ['ok', 'ok', 'ok', 'duplicate', 'ok']);
+  assert.equal(kept.stats.ok, 4);
+  assert.equal(kept.stats.sharedNumber, 2);
+  assert.equal(kept.stats.duplicate, 1);
+  assert.match(kept.contacts[1].reason, /same number as row 2: gets its own message/);
+  assert.match(kept.contacts[3].reason, /identical to row 2/);
+  assert.equal(kept.contacts[0].sharedNumber, undefined, 'the first row is not marked as a repeat');
+
+  // Default (and keepDuplicates: false): only the first row of a number is kept.
+  for (const options of [{ defaultCountry: 'LB' }, { defaultCountry: 'LB', keepDuplicates: false }]) {
+    const removed = parseContacts({ text }, options);
+    assert.deepEqual(removed.contacts.map(c => c.status), ['ok', 'duplicate', 'duplicate', 'duplicate', 'ok']);
+    assert.equal(removed.stats.sharedNumber, 0);
+  }
+});

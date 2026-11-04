@@ -26,7 +26,7 @@ const settingsFile = new JsonFile(path.join(config.dataDir, 'settings.json'));
 function loadSettings() {
   const saved = settingsFile.read({}) || {};
   const country = String(saved.defaultCountry || config.defaultCountry).toUpperCase();
-  return { ...sanitizeSettings(saved), defaultCountry: /^[A-Z]{2}$/.test(country) ? country : 'LB' };
+  return { ...sanitizeSettings(saved), defaultCountry: /^[A-Z]{2}$/.test(country) ? country : 'LB', keepDuplicates: saved.keepDuplicates === true };
 }
 let settings = loadSettings();
 const counter = new DailyCounter(path.join(config.dataDir, 'daily-counts.json'));
@@ -238,7 +238,9 @@ app.put('/api/settings', wrap((req, res) => {
   const body = req.body || {};
   const clean = sanitizeSettings({ ...settings, ...body });
   const country = String(body.defaultCountry || settings.defaultCountry || config.defaultCountry).toUpperCase();
-  settings = { ...clean, defaultCountry: /^[A-Z]{2}$/.test(country) ? country : settings.defaultCountry };
+  // Same number on several rows: one message per row (true) or only the first row (false).
+  const keepDuplicates = body.keepDuplicates === undefined ? settings.keepDuplicates === true : body.keepDuplicates === true || body.keepDuplicates === 'true';
+  settings = { ...clean, defaultCountry: /^[A-Z]{2}$/.test(country) ? country : settings.defaultCountry, keepDuplicates };
   settingsFile.write(settings);
   io.emit('settings', settings);
   updateKeepAwake();
@@ -273,7 +275,8 @@ app.post('/api/contacts/parse', upload.single('file'), wrap((req, res) => {
     ? { buffer: req.file.buffer, filename: req.file.originalname }
     : { text: String(body.text || '') };
   if (!req.file && !input.text.trim()) throw fail(400, 'Upload a file or paste some rows first');
-  res.json(parseContacts(input, { defaultCountry, mapping, hasHeader }));
+  const keepDuplicates = body.keepDuplicates === undefined ? settings.keepDuplicates === true : body.keepDuplicates === 'true';
+  res.json(parseContacts(input, { defaultCountry, mapping, hasHeader, keepDuplicates }));
 }));
 
 app.post('/api/preview', wrap((req, res) => {
