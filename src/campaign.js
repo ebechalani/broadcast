@@ -366,7 +366,7 @@ class Campaign extends EventEmitter {
     }
   }
 
-  /** What an earlier row with the same number found out: its chat id, or that it is not on WhatsApp. */
+  /** What another row with the same number already found out: its chat id, or that it is not on WhatsApp. */
   _knownNumber(item, index) {
     for (let i = 0; i < this.items.length; i++) {
       const other = this.items[i];
@@ -396,13 +396,13 @@ class Campaign extends EventEmitter {
       const { text } = render(this.template, item);
       let chatId = item.chatId;
       // The same number can be on several rows (a parent of three children gets
-      // three messages): reuse what an earlier row learned about it.
+      // three messages): reuse what another row already learned about it.
       const known = chatId ? null : this._knownNumber(item, index);
       if (known && known.notOnWhatsApp) {
         item.status = 'not_on_whatsapp';
         item.error = 'Number is not registered on WhatsApp';
         // Not a new "not on WhatsApp" answer: does not count toward the safety pause.
-        this._log('warn', `Skipped ${who} (${item.phoneDisplay}): not on WhatsApp (same number as an earlier row)`);
+        this._log('warn', `Skipped ${who} (${item.phoneDisplay}): not on WhatsApp (same number as another row in this list)`);
         this.emit('item', { index, item });
         this._emitState();
         return;
