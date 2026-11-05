@@ -38,7 +38,7 @@ Then open <http://127.0.0.1:3210> if it does not open by itself.
 ### Step by step
 
 1. **Link your WhatsApp number.** Click *Connect*. On your phone open WhatsApp → *Linked devices* → *Link a device* and scan the code. The badge turns green and shows your number. Next time the app starts it reconnects by itself.
-2. **Contacts.** Drop a `.csv` or `.xlsx` file, or paste rows copied from Excel. Check the detected columns and fix them if needed. Invalid and duplicate numbers are flagged and skipped. Pick the default country used for numbers written without a country code (Lebanon by default).
+2. **Contacts.** Drop a `.csv` or `.xlsx` file, or paste rows copied from Excel. Check the detected columns and fix them if needed. Invalid numbers are flagged and skipped. A number on several rows (a parent of several children) is sent once by default, or one message per row if you tick that option. Pick the default country used for numbers written without a country code (Lebanon by default).
 3. **Message.** Type your text. Click a placeholder chip to insert it. The preview shows the message for a real contact. *Send a test to myself* delivers it to your own number so you can see it on your phone.
 4. **Send.** Review the pacing settings, click *Start sending*, and keep the window open. You can pause or stop at any time; the progress table shows what happened to each contact. *Retry failed* puts failed contacts back in the queue (and, if you choose, the ones reported as not on WhatsApp); press *Resume* to send them.
 

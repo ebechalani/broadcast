@@ -361,3 +361,29 @@ async function waitFor(fn, timeout = 3000) {
     await sleep(10);
   }
 }
+
+test('the same number on several rows gets one message per row, checked on WhatsApp once', async () => {
+  const client = fakeClient();
+  const family = [
+    { id: 'c1', firstName: 'Rita', phone: '96170123456', extra: { Enfant: 'Karim' } },
+    { id: 'c2', firstName: 'Rita', phone: '96170123456', extra: { Enfant: 'Lea' } },
+    { id: 'c3', firstName: 'Jean', phone: '96171000001', extra: { Enfant: 'Paul' } },
+    { id: 'c4', firstName: 'Rita', phone: '96170123456', extra: { Enfant: 'Nour' } },
+  ];
+  const c = new Campaign({ template: '{{firstName}}: {{Enfant}}', contacts: family, settings: fast, client });
+  await c.start();
+  assert.deepEqual(client.sent.map(s => s.text), ['Rita: Karim', 'Rita: Lea', 'Jean: Paul', 'Rita: Nour']);
+  assert.deepEqual(client.checks, ['96170123456', '96171000001'], 'each number is looked up once');
+});
+
+test('repeats of a number that is not on WhatsApp are skipped without tripping the skip safety pause', async () => {
+  const client = fakeClient({ notRegistered: ['96170999999'] });
+  const rows = ['A', 'B', 'C', 'D'].map((child, i) => ({ id: `c${i + 1}`, firstName: 'X', phone: '96170999999', extra: { Enfant: child } }));
+  rows.push({ id: 'c5', firstName: 'Jean', phone: '96171000001', extra: {} });
+  const c = new Campaign({ template: 'x', contacts: rows, settings: { ...fast, maxConsecutiveSkips: 2 }, client });
+  await c.start();
+  assert.equal(c.state, 'done', 'not paused: only one real "not on WhatsApp" answer');
+  assert.equal(c.counts().notOnWhatsApp, 4);
+  assert.equal(c.counts().sent, 1);
+  assert.deepEqual(client.checks, ['96170999999', '96171000001']);
+});

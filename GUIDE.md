@@ -106,8 +106,19 @@ Two sample files are in the `samples` folder and behind the **Sample** buttons o
 
 1. In box **2 – Contacts**, either drag your file onto the dotted area, or click the dotted area and choose the file, or copy the rows in Excel and paste them in the text box on the right, then click **Use pasted rows**.
 2. Check the line **Detected columns**: First name, Last name, Phone. If a column is wrong, change it in the drop-downs and click **Apply**.
-3. Look at the summary: **N ready**, and possibly **invalid** (bad or missing number) and **duplicate** (same number twice). Only *ready* contacts receive a message. The table shows every line with the reason when something is wrong, with the row number of your file so you can fix it in Excel and load again.
+3. Look at the summary: **N ready**, and possibly **invalid** (bad or missing number) and **duplicate** (left out, not sent). Only *ready* rows receive a message. The table shows every line with the reason when something is wrong, with the row number of your file so you can fix it in Excel and load again.
 4. If your numbers are not Lebanese, pick the right **Default country** before loading.
+
+### Same number on several rows (parents of several children)
+
+Under the default country there is a tick box: **Same number on several rows: send one message per row**. The app remembers your choice.
+
+- **Ticked:** every row gets its own message, even when the number was already used. A parent with 3 children on 3 rows receives 3 messages, each with the right child's details (`{{Enfant}}`, `{{Classe}}`…). The summary shows these rows as **same number, own message**. The number is checked on WhatsApp only once.
+- **Unticked:** only the first row of each number is kept; the others are shown as **duplicate** and not sent.
+
+Even when ticked, a row that is a **perfect copy** of an earlier one (same number, same names, same value in every column) is still shown as **duplicate** and not sent, because it would send the exact same message twice. If you really need it, change something on that row.
+
+Messages go out in the order of the rows in your file. If a parent's rows are next to each other, their messages arrive a minute or so apart (the normal 25–60 s pause). If they are far apart (for example a list sorted by class), they can arrive much later, or even the next day when the daily limit is reached. To keep them together, sort the file by phone number in Excel before loading it.
 
 ---
 

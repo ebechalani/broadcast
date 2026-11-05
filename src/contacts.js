@@ -337,11 +337,19 @@ const ROLES = ['firstName', 'lastName', 'fullName', 'phone', 'countryCode'];
  * @param {{buffer?: Buffer, filename?: string, text?: string}} input
  * @param {{defaultCountry?: string, mapping?: object, hasHeader?: boolean|null, prettifyNames?: boolean}} options
  */
+// What makes two rows with the same number "the same row": names and every
+// other column, ignoring case and extra spaces.
+function rowDetailsKey(contact) {
+  const norm = v => String(v === undefined || v === null ? '' : v).replace(/\s+/g, ' ').trim().toLowerCase();
+  const extra = Object.keys(contact.extra || {}).sort().map(k => [k, norm(contact.extra[k])]);
+  return JSON.stringify([norm(contact.firstName), norm(contact.lastName), extra]);
+}
+
 function parseContacts(input, options = {}) {
   const defaultCountry = (options.defaultCountry || 'LB').toUpperCase();
   const { rows: all, srcRows: allSrc } = compact(toMatrix(input));
   if (!all.length) {
-    return { contacts: [], headers: [], extraHeaders: [], mapping: { ...EMPTY_MAPPING }, hasHeader: false, headerRow: null, stats: { total: 0, ok: 0, invalid: 0, duplicate: 0 } };
+    return { contacts: [], headers: [], extraHeaders: [], mapping: { ...EMPTY_MAPPING }, hasHeader: false, headerRow: null, stats: { total: 0, ok: 0, invalid: 0, duplicate: 0, sharedNumber: 0 } };
   }
   if (all.length > MAX_ROWS) {
     const err = new Error(`Too many rows (${all.length}). The limit is ${MAX_ROWS}; split the file.`);
@@ -398,7 +406,10 @@ function parseContacts(input, options = {}) {
   const extraHeaders = headers.filter((h, i) => !roleCols.has(i));
 
   const contacts = [];
+  // number -> row of its first use; and, when repeats are kept, number -> (row details -> row)
   const seenPhones = new Map();
+  const seenRows = new Map();
+  const keepDuplicates = options.keepDuplicates === true;
   rows.forEach((row, i) => {
     const get = c => (c >= 0 && row[c] !== undefined ? String(row[c]).trim() : '');
     let firstName = get(idx.firstName);
@@ -465,12 +476,26 @@ function parseContacts(input, options = {}) {
     if (!phone.ok) {
       contact.status = 'invalid';
       contact.reason = idx.phone < 0 && !fallbackIdx.length ? 'no phone column' : phone.reason;
-    } else if (seenPhones.has(phone.digits)) {
+    } else if (seenPhones.has(phone.digits) && !keepDuplicates) {
       contact.status = 'duplicate';
       contact.reason = `same number as row ${seenPhones.get(phone.digits)}`;
+    } else if (keepDuplicates && seenRows.get(phone.digits) && seenRows.get(phone.digits).has(rowDetailsKey(contact))) {
+      // Same number AND same details (names, every other column): a copy-paste
+      // repeat, which would send the very same message twice.
+      contact.status = 'duplicate';
+      contact.reason = `identical to row ${seenRows.get(phone.digits).get(rowDetailsKey(contact))} (same number and same details)`;
     } else {
-      seenPhones.set(phone.digits, contact.row);
+      const firstRow = seenPhones.get(phone.digits);
+      if (firstRow === undefined) seenPhones.set(phone.digits, contact.row);
+      if (keepDuplicates) {
+        if (!seenRows.has(phone.digits)) seenRows.set(phone.digits, new Map());
+        seenRows.get(phone.digits).set(rowDetailsKey(contact), contact.row);
+      }
       const notes = [];
+      if (firstRow !== undefined) {
+        contact.sharedNumber = true;
+        notes.push(`same number as row ${firstRow}: gets its own message`);
+      }
       if (contact.phoneSource) notes.push(`number taken from "${contact.phoneSource}"`);
       if (phone.note) notes.push(phone.note);
       if (!phone.valid) notes.push('unusual length for this country, will be checked on WhatsApp');
@@ -484,6 +509,8 @@ function parseContacts(input, options = {}) {
     ok: contacts.filter(c => c.status === 'ok').length,
     invalid: contacts.filter(c => c.status === 'invalid').length,
     duplicate: contacts.filter(c => c.status === 'duplicate').length,
+    // Ready rows whose number was already used by an earlier ready row (repeats kept on purpose).
+    sharedNumber: contacts.filter(c => c.status === 'ok' && c.sharedNumber).length,
   };
   return {
     contacts,
